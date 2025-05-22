@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// AnyQueue is a thread-safe queue that supports both in-memory and retryable (persistent) tasks.
+// It manages task execution, retry logic, and queue statistics.
 type AnyQueue struct {
 	name          string
 	maxSize       int
@@ -42,6 +44,9 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 	}
 }
 
+// Enqueue adds a Task to the queue for processing.
+// For in-memory tasks, it immediately starts execution in a goroutine.
+// For retryable tasks, it persists the task and manages retry logic.
 func (q *AnyQueue) Enqueue(task Task) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -116,8 +121,9 @@ func (q *AnyQueue) processTask(task Task) {
 	}
 }
 
-// ProcessDueTasks processes all tasks that are due for execution
-// It automatically uses registered task factories from the registry
+// ProcessDueTasks processes all tasks that are due for execution.
+// It uses registered task factories to reconstruct and execute retryable tasks.
+// This method is typically called periodically, either by a ticker or a scheduler.
 func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
 	// Fetch tasks due for execution
 	tasks, err := FetchDueTasks()
@@ -212,40 +218,47 @@ func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
 	}
 }
 
-// TaskFactory creates a Task from its stored data
-// The factory should handle all aspects of reconstructing the task
-// including unmarshaling any stored data
+// TaskFactory creates a Task from its stored data.
+// The factory function is responsible for reconstructing a Task instance, including unmarshaling any stored data.
 type TaskFactory func(id string, data string) (Task, error)
 
+// Name returns the name of the queue.
 func (q *AnyQueue) Name() string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.name
 }
 
+// Size returns the number of active tasks currently in the queue.
 func (q *AnyQueue) Size() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.activeTasks)
 }
 
+// RemainingCapacity returns the number of additional tasks that can be enqueued before reaching maxSize.
 func (q *AnyQueue) RemainingCapacity() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.maxSize - len(q.activeTasks)
 }
 
+// TotalProcessed returns the total number of tasks that have been processed and dequeued.
 func (q *AnyQueue) TotalProcessed() int {
 	return int(atomic.LoadInt64(&q.totalDequeued)) // atomic read
 }
 
+// TotalEnqueued returns the total number of tasks that have been enqueued.
 func (q *AnyQueue) TotalEnqueued() int {
 	return int(atomic.LoadInt64(&q.totalEnqueued)) // atomic read
 }
 
-// TaskWithData interface extends Task to allow saving and retrieving task data
+// TaskWithData extends Task to support saving and retrieving task-specific data.
+// Implement this interface if your task needs to persist additional fields.
 type TaskWithData interface {
 	Task
-	MarshalData() ([]byte, error) // Serialize task data to JSON
-	UnmarshalData([]byte) error   // Deserialize task data from JSON
+	// MarshalData serializes the task data to JSON.
+	MarshalData() ([]byte, error)
+	// UnmarshalData deserializes the task data from JSON.
+	UnmarshalData([]byte) error
 }

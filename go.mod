@@ -1,4 +1,4 @@
-module github.com/snerd-go
+module github.com/greyhands2/snerd-go
 
 go 1.23.2
 

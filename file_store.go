@@ -12,7 +12,8 @@ import (
 
 var compacting atomic.Bool
 
-// this filestore handles persistent storage
+// FileStore provides persistent storage for retryable tasks.
+// It manages task log files, compaction, and metadata tracking for tasks.
 type FileStore struct {
 	mu           sync.Mutex
 	filePath     string
@@ -21,7 +22,8 @@ type FileStore struct {
 	appendCount  int
 }
 
-// NewFileStore creates a new FileStore for the clients
+// NewFileStore creates a new FileStore for the given file path.
+// It rebuilds metadata from the existing log file if present.
 func NewFileStore(path string) (*FileStore, error) {
 	fs := &FileStore{
 		filePath: path,
@@ -35,6 +37,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	return fs, nil
 }
 
+// RebuildMetaData scans the log file and rebuilds internal counters for tasks and deletions.
 func (fs *FileStore) RebuildMetaData() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -78,6 +81,7 @@ func (fs *FileStore) RebuildMetaData() error {
 	return scanner.Err()
 }
 
+// CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	// get the mutex lock and unlock out of the way
 	fs.mu.Lock()

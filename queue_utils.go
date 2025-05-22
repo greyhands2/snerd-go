@@ -10,8 +10,8 @@ import (
 	"github.com/shirou/gopsutil/mem"
 )
 
-// CalculateDynamicQueueSize calculates optimal queue size based on system resources
-// This helps with auto-scaling queue capacity based on available memory and CPU
+// CalculateDynamicQueueSize returns an optimal queue size based on system resources.
+// It uses available CPU and memory to auto-scale queue capacity.
 func CalculateDynamicQueueSize() int {
 	numOfCPUs, _ := cpu.Counts(true)
 	virtualMemory, _ := mem.VirtualMemory()
@@ -21,8 +21,8 @@ func CalculateDynamicQueueSize() int {
 	return numOfCPUs * memoryFactor
 }
 
-// LogQueueUsage monitors a queue and logs its stats periodically
-// Stops automatically when the queue is empty or when context is done
+// LogQueueUsage monitors a queue and logs its stats periodically.
+// Logging stops automatically when the queue is empty or when the context is canceled.
 func LogQueueUsage(ctx context.Context, queue *AnyQueue, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
@@ -84,8 +84,9 @@ func ProcessInMemoryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGro
 	}()
 }
 
-// ProcessRetryQueue processes a retryable task queue with proper rate limiting
-// Unlike ProcessInMemoryQueue, this actively polls the database for due tasks
+// ProcessRetryQueue starts a background goroutine that periodically processes retryable tasks.
+// It polls for due tasks at the specified interval and processes them using the provided queue.
+// The function stops when the provided context is canceled.
 func ProcessRetryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGroup, interval time.Duration) {
 	wg.Add(1)
 	go func() {
