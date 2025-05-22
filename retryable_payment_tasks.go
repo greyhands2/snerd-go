@@ -212,7 +212,7 @@ func DeleteTask(taskId string) error {
 
 // GetRegisteredTaskFactory returns a task factory for a specific task type
 func GetRegisteredTaskFactory(retryableTask RetryableTask) (func(id string, data string) (Task, error), bool) {
-	factory, exists := taskFactories[retryableTask.TaskType]
+	factory, exists := taskFactories["any-task"]
 	if !exists {
 		return nil, false
 	}
