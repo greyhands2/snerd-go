@@ -84,7 +84,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	} else {
 		// Default values if task doesn't provide them
 		retryTask.MaxRetries = 5
-		retryTask.RetryAfterTime = time.Now().Add(time.Duration(retryTask.RetryAfter) * time.Hour)
+		retryTask.RetryAfterTime = time.Now().Add(time.Duration(retryTask.RetryAfterHours) * time.Hour)
 	}
 
 	// Get task type for registry lookup

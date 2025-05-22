@@ -238,7 +238,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string) error {
 	}
 
 	latest.RetryCount++
-	latest.RetryAfterTime = time.Now().Add(time.Duration(latest.RetryAfter) * time.
+	latest.RetryAfterTime = time.Now().Add(time.Duration(latest.RetryAfterHours) * time.
 		Hour)
 
 	return fs.CreateTask(latest)

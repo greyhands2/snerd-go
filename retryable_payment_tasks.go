@@ -19,11 +19,11 @@ func init() {
 				TaskData string `json:"taskData"`
 			}) Task {
 				return &RetryableTask{
-					TaskID:     id,
-					TaskData:   payload.TaskData,
-					RetryCount: 0,
-					MaxRetries: 5,
-					RetryAfter: int(time.Now().Add(24 * time.Hour).Unix()),
+					TaskID:          id,
+					TaskData:        payload.TaskData,
+					RetryCount:      0,
+					MaxRetries:      5,
+					RetryAfterHours: 24,
 				}
 			},
 		)
@@ -39,13 +39,13 @@ type JobErrorReturn struct {
 
 // Task with retries
 type RetryableTask struct {
-	TaskID         string    `json:"taskId"`
-	RetryCount     int       `json:"retryCount"`
-	MaxRetries     int       `json:"maxRetries"`
-	RetryAfter     int       `json:"retryAfter"`
-	RetryAfterTime time.Time `json:"retryAfterTime"`
-	TaskData       string    `json:"taskData"` // JSON string to store task-specific data
-	TaskType       string    `json:"taskType"` // Type identifier for registry lookup
+	TaskID          string    `json:"taskId"`
+	RetryCount      int       `json:"retryCount"`
+	MaxRetries      int       `json:"maxRetries"`
+	RetryAfterHours float64   `json:"retryAfterHours"`
+	RetryAfterTime  time.Time `json:"retryAfterTime"`
+	TaskData        string    `json:"taskData"` // JSON string to store task-specific data
+	TaskType        string    `json:"taskType"` // Type identifier for registry lookup
 	// Fields to store error information for OnMaxRetryReached
 	LastErrorObj error
 	LastJobError *JobErrorReturn
@@ -65,7 +65,7 @@ func (t *RetryableTask) GetRetryCount() int           { return t.RetryCount }
 func (t *RetryableTask) GetMaxRetries() int           { return t.MaxRetries }
 func (t *RetryableTask) GetRetryAfterTime() time.Time { return t.RetryAfterTime }
 
-func (t *RetryableTask) GetRetryAfter() int { return t.RetryAfter }
+func (t *RetryableTask) GetRetryAfterHours() float64 { return t.RetryAfterHours }
 
 func (t *RetryableTask) GenerateRandomString(length int) (string, error) {
 	randomBytes := make([]byte, (length*3+3)/4) // Adjust the byte slice length to ensure enough bytes for base64 encoding
@@ -220,8 +220,8 @@ func GetRegisteredTaskFactory(retryableTask RetryableTask) (func(id string, data
 		}
 
 		// Set the RetryConfig fields if the task implements a setter for it
-		if retryCountSetter, ok := task.(interface{ SetRetryConfigFields(int, int, int) }); ok {
-			retryCountSetter.SetRetryConfigFields(retryableTask.RetryCount, retryableTask.MaxRetries, retryableTask.RetryAfter)
+		if retryCountSetter, ok := task.(interface{ SetRetryConfigFields(int, int, float64) }); ok {
+			retryCountSetter.SetRetryConfigFields(retryableTask.RetryCount, retryableTask.MaxRetries, retryableTask.RetryAfterHours)
 			fmt.Printf("Set retry count for task %s to %d\n", id, retryableTask.RetryCount)
 		}
 
@@ -275,7 +275,7 @@ func CreateTaskWithPayload[P any](
 	taskType string,
 	payload P,
 	maxRetries int,
-	retryAfter int,
+	retryAfterHours int,
 ) (*RetryableTask, error) {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -285,16 +285,16 @@ func CreateTaskWithPayload[P any](
 	data := string(payloadJSON)
 
 	// Ensure RetryAfter is in UTC for consistency
-	retryAfterTime := time.Now().Add(time.Duration(retryAfter) * time.
+	retryAfterTime := time.Now().Add(time.Duration(retryAfterHours) * time.
 		Hour)
 	task := &RetryableTask{
-		TaskID:         taskID,
-		RetryCount:     0,
-		MaxRetries:     maxRetries,
-		RetryAfter:     retryAfter,
-		RetryAfterTime: retryAfterTime,
-		TaskData:       data,
-		TaskType:       taskType,
+		TaskID:          taskID,
+		RetryCount:      0,
+		MaxRetries:      maxRetries,
+		RetryAfterHours: float64(retryAfterHours),
+		RetryAfterTime:  retryAfterTime,
+		TaskData:        data,
+		TaskType:        taskType,
 	}
 	if err := task.Save(); err != nil {
 		return nil, err
