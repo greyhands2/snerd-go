@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -87,6 +88,10 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	// Ensure parent directory exists before creating or appending to the file
+	if err := os.MkdirAll(filepath.Dir(fs.filePath), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
@@ -142,6 +147,10 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 
 	f, err := os.Open(fs.filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// No tasks file yet; return empty slice, not an error
+			return []*RetryableTask{}, nil
+		}
 		return nil, fmt.Errorf("open file: %w", err)
 	}
 	defer func(f *os.File) {
