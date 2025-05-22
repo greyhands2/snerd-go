@@ -127,6 +127,7 @@ func (q *AnyQueue) processTask(task Task) {
 // It uses registered task factories to reconstruct and execute retryable tasks.
 // This method is typically called periodically, either by a ticker or a scheduler.
 func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
+	fmt.Println("Processing due tasks for queue:", q.Name())
 	// Fetch tasks due for execution
 	tasks, err := FetchDueTasks()
 	if err != nil {
