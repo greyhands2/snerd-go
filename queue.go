@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // AnyQueue is a thread-safe queue that supports both in-memory and retryable (persistent) tasks.
@@ -66,7 +67,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 		go q.processTask(task)
 		return nil
 	}
-
+	fmt.Println("Enqueueing retryable task:", task.GetTaskID())
 	// For retryable tasks, store in DB with task-specific retry settings
 	retryTask := RetryableTask{
 		TaskID:     task.GetTaskID(),
@@ -86,6 +87,8 @@ func (q *AnyQueue) Enqueue(task Task) error {
 		retryTask.RetryAfterHours = 1.0
 	}
 
+	retryTask.RetryAfterTime = time.Now().Add(time.Duration(retryTask.RetryAfterHours) * time.Hour)
+	fmt.Println("Retryable task settings:", retryTask)
 	// Get task type for registry lookup
 	if taskWithType, ok := task.(interface{ GetTaskType() string }); ok {
 		retryTask.TaskType = taskWithType.GetTaskType()
@@ -99,7 +102,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 		}
 		retryTask.TaskData = string(data)
 	}
-
+	fmt.Println("Retryable task data:", retryTask)
 	// Save to database
 	err := retryTask.Save()
 	if err == nil {
