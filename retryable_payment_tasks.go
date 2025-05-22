@@ -142,12 +142,14 @@ func CreateTaskFactoryWithDecoder[P any](creator func(taskID string, payload P) 
 
 // Save a task to the database
 func (t *RetryableTask) Save() error {
+	fmt.Println("Saving task:", t)
 	var err error
 	t.TaskID, err = t.GenerateRandomString(12)
 	if err != nil {
 		return fmt.Errorf("error generating task ID: %w", err)
 	}
 
+	fmt.Println("Generated task ID:", t.TaskID)
 	t.CreatedAt = time.Now()
 	t.UpdatedAt = t.CreatedAt
 	t.DeletedAt = nil
@@ -155,9 +157,11 @@ func (t *RetryableTask) Save() error {
 	if err != nil {
 		return err
 	}
+	fmt.Println("Saving task to file store:", t)
 	if err := fileStore.CreateTask(t); err != nil {
 		return err
 	}
+	fmt.Println("Saved task to file store:", t)
 	return nil
 }
 
