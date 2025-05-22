@@ -108,6 +108,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	if err == nil {
 		atomic.AddInt64(&q.totalEnqueued, 1)
 	}
+	fmt.Println("Enqueued task:", retryTask)
 	return err
 }
 
