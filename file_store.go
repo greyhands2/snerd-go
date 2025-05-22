@@ -136,10 +136,12 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	if fs.shouldCompact() {
 		fmt.Println("Triggering compaction")
 		go func() {
+			fmt.Println("Compacting file")
 			err := fs.Compact()
 			if err != nil {
 				fmt.Printf("Error compacting file: %s\n", err)
 			}
+			fmt.Println("Compacted file")
 		}()
 
 	}
@@ -276,6 +278,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
+	fmt.Println("Opened file for appending")
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
@@ -314,6 +317,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 // our implementation of Compaction. Compaction is the process of cleaning up the task log file by removing obsolete
 // entries—such as soft-deleted or outdated task versions—to reduce file size and improve read efficiency.
 func (fs *FileStore) Compact() error {
+	fmt.Println("Compacting file")
 	if !compacting.CompareAndSwap(false, true) {
 		return nil // already compacting
 	}
@@ -322,11 +326,12 @@ func (fs *FileStore) Compact() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	fmt.Println("Opening file:", fs.filePath)
 	f, err := os.Open(fs.filePath)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-
+	fmt.Println("Opened file:", f)
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
@@ -335,6 +340,7 @@ func (fs *FileStore) Compact() error {
 		}
 	}(f)
 
+	fmt.Println("Building latest state of each task")
 	// Build the latest state of each task
 	taskMap := make(map[string]*RetryableTask)
 	scanner := bufio.NewScanner(f)
@@ -357,14 +363,14 @@ func (fs *FileStore) Compact() error {
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan file: %w", err)
 	}
-
+	fmt.Println("Scanned file")
 	//write to temp file
 	tempPath := fs.filePath + ".tmp"
 	tempFile, err := os.Create(tempPath)
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-
+	fmt.Println("Created temp file:", tempFile)
 	encoder := json.NewEncoder(tempFile)
 	for _, task := range taskMap {
 		if err := encoder.Encode(task); err != nil {
@@ -377,6 +383,7 @@ func (fs *FileStore) Compact() error {
 	}
 
 	// flush tempfile to disk
+	fmt.Println("Flushing tempfile to disk")
 	if err := tempFile.Sync(); err != nil {
 		err := tempFile.Close()
 		if err != nil {
@@ -388,11 +395,13 @@ func (fs *FileStore) Compact() error {
 	if err := tempFile.Close(); err != nil {
 		return fmt.Errorf("close tempfile: %w", err)
 	}
-
+	fmt.Println("Closed tempfile")
 	// finally atomically replace old file
+	fmt.Println("Renaming tempfile to file")
 	if err := os.Rename(tempPath, fs.filePath); err != nil {
 		return fmt.Errorf("rename tempfile: %w", err)
 	}
+	fmt.Println("Renamed tempfile to file")
 
 	return nil
 
