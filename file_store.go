@@ -84,6 +84,7 @@ func (fs *FileStore) RebuildMetaData() error {
 
 // CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
+	fmt.Println("Creating task:", task)
 	// get the mutex lock and unlock out of the way
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -92,10 +93,13 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	if err := os.MkdirAll(filepath.Dir(fs.filePath), 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
+
+	fmt.Println("Opening file:", fs.filePath)
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
+	fmt.Println("Opened file:", f)
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
@@ -108,15 +112,16 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	if err != nil {
 		return fmt.Errorf("marshal task: %w", err)
 	}
-
+	fmt.Println("Writing task to file:", string(data))
 	_, err = f.Write(append(data, '\n'))
 	if err != nil {
 		return fmt.Errorf("write task: %w", err)
 	}
-
+	fmt.Println("Wrote task to file")
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync task: %w", err)
 	}
+	fmt.Println("Synced task to file")
 
 	// Track stats
 	fs.appendCount++
@@ -125,9 +130,11 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	} else {
 		fs.totalTasks++
 	}
+	fmt.Println("Updated stats:", fs)
 
 	// Check if compaction should be triggered
 	if fs.shouldCompact() {
+		fmt.Println("Triggering compaction")
 		go func() {
 			err := fs.Compact()
 			if err != nil {
@@ -136,7 +143,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 		}()
 
 	}
-
+	fmt.Println("Done with compaction")
 	return nil
 
 }
