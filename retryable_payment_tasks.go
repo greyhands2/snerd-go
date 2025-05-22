@@ -30,7 +30,7 @@ func init() {
 	})
 }
 
-const filePath = "/var/tasks/tasks.log"
+const filePath = "/data/tasks/tasks.log"
 
 type JobErrorReturn struct {
 	ErrorObj    error
