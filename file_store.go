@@ -29,7 +29,7 @@ func NewFileStore(path string) (*FileStore, error) {
 		filePath: path,
 	}
 
-	// rebuild counters from existing task.log file
+	// rebuild counters from existing task.log file.
 	if err := fs.RebuildMetaData(); err != nil {
 		return nil, fmt.Errorf("rebuild metadata: %w", err)
 	}
@@ -45,7 +45,7 @@ func (fs *FileStore) RebuildMetaData() error {
 	file, err := os.Open(fs.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// nothing to rebuild
+			// nothing to rebuild.
 			return nil
 		}
 		return fmt.Errorf("open file: %w", err)
