@@ -1,5 +1,7 @@
 # snerd-go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
+
 A Go library for in-memory and persistent retryable task queues.
 
 ## Features
@@ -12,12 +14,14 @@ A Go library for in-memory and persistent retryable task queues.
 
 ## Full Example: In-Memory Tasks
 
+> **Note:** All examples use the import alias `snerd` for clarity.
+
 ```go
 package main
 
 import (
     "fmt"
-    "yourmodule/queue" // Replace with your actual import path
+    snerd "github.com/greyhands2/snerd-go"
 )
 
 type PrintTask struct {
@@ -34,7 +38,7 @@ func (t *PrintTask) Execute() error {
 
 func main() {
     // Create an in-memory queue
-    q := queue.NewAnyQueue("example-queue", 10)
+    q := snerd.NewAnyQueue("example-queue", 10)
 
     // Enqueue tasks
     q.Enqueue(&PrintTask{ID: "task1", Count: 1})
@@ -56,7 +60,7 @@ import (
     "fmt"
     "sync"
     "time"
-    "yourmodule/queue" // Replace with your actual import path
+    snerd "github.com/greyhands2/snerd-go"
 )
 
 type SendEmailTask struct {
@@ -90,10 +94,10 @@ func (t *SendEmailTask) OnMaxRetryReached(contextProvider func() interface{}) er
 
 func main() {
     // Register your retryable task type if needed (see your library's registration system)
-    // queue.RegisterTaskType(...)
+    // snerd.RegisterTaskType(...)
 
     // Create a queue for retryable tasks
-    q := queue.NewAnyQueue("retry-queue", 10)
+    q := snerd.NewAnyQueue("retry-queue", 10)
 
     // Enqueue a retryable email task
     q.Enqueue(&SendEmailTask{
@@ -109,7 +113,7 @@ func main() {
     var wg sync.WaitGroup
 
     // Start processing retryable tasks every 30 seconds
-    queue.ProcessRetryQueue(ctx, q, &wg, 30*time.Second)
+    snerd.ProcessRetryQueue(ctx, q, &wg, 30*time.Second)
 
     // Let it run for a while (for demo purposes)
     time.Sleep(2 * time.Minute)
@@ -130,7 +134,7 @@ import (
     "fmt"
     "sync"
     "time"
-    "yourmodule/queue" // Replace with your actual module path
+    snerd "github.com/greyhands2/snerd-go"
 )
 ```
 
@@ -170,7 +174,7 @@ import (
 ### 4. Create and Use a Queue
 ```go
 // Create an in-memory queue
-q := queue.NewAnyQueue("example-queue", 10)
+q := snerd.NewAnyQueue("example-queue", 10)
 
 // Enqueue a normal task
 q.Enqueue(&PrintTask{ID: "task1", Count: 1})
@@ -201,7 +205,7 @@ import "github.com/robfig/cron/v3"
 c := cron.New()
 c.AddFunc("@every 1m", func() {
     // This will run every minute
-    queue.ProcessDueTasks() // or your own wrapper for processing retryable tasks
+    snerd.ProcessDueTasks() // or your own wrapper for processing retryable tasks
 })
 c.Start()
 // ...
@@ -216,7 +220,7 @@ You can also run a Go program or script that processes retryable tasks from your
 * * * * * /usr/local/bin/my-retryable-task-processor
 ```
 
-Where `my-retryable-task-processor` is a Go program that calls `queue.ProcessDueTasks()` or similar logic once per invocation.
+Where `my-retryable-task-processor` is a Go program that calls `snerd.ProcessDueTasks()` or similar logic once per invocation.
 
 #### Example: Continuous Background Processing (as before)
 ```go
@@ -225,7 +229,7 @@ defer cancel()
 var wg sync.WaitGroup
 
 // Start processing retryable tasks every 30 seconds
-queue.ProcessRetryQueue(ctx, q, &wg, 30*time.Second)
+snerd.ProcessRetryQueue(ctx, q, &wg, 30*time.Second)
 
 // ...
 // To stop processing:

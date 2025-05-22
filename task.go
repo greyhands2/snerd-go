@@ -1,4 +1,4 @@
-package queue
+package snerd
 
 // Task represents a unit of work that can be processed by the queue system.
 // Implement this interface to define your own task types.
