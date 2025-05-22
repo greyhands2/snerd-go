@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // AnyQueue is a thread-safe queue that supports both in-memory and retryable (persistent) tasks.
@@ -54,7 +53,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	// Check if this is a retryable task or in-memory task
 	_, isRetryable := task.(interface {
 		GetMaxRetries() int
-		GetRetryAfterTime() time.Time
+		GetRetryAfterHours() float64
 	})
 
 	// For non-retryable memory-only tasks
@@ -77,14 +76,14 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	// Get retry settings from task
 	if taskWithRetry, ok := task.(interface {
 		GetMaxRetries() int
-		GetRetryAfterTime() time.Time
+		GetRetryAfterHours() float64
 	}); ok {
 		retryTask.MaxRetries = taskWithRetry.GetMaxRetries()
-		retryTask.RetryAfterTime = taskWithRetry.GetRetryAfterTime()
+		retryTask.RetryAfterHours = taskWithRetry.GetRetryAfterHours()
 	} else {
 		// Default values if task doesn't provide them
 		retryTask.MaxRetries = 5
-		retryTask.RetryAfterTime = time.Now().Add(time.Duration(retryTask.RetryAfterHours) * time.Hour)
+		retryTask.RetryAfterHours = 1.0
 	}
 
 	// Get task type for registry lookup
