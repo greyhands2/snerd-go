@@ -106,6 +106,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	// Save to database
 	err := retryTask.Save()
 	if err == nil {
+		fmt.Println("Enqueued task:", retryTask)
 		atomic.AddInt64(&q.totalEnqueued, 1)
 	}
 	fmt.Println("Enqueued task:", retryTask)
