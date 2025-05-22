@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,8 +92,23 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	defer fs.mu.Unlock()
 
 	// Ensure parent directory exists before creating or appending to the file
-	if err := os.MkdirAll(filepath.Dir(fs.filePath), 0755); err != nil {
+	dirPath := filepath.Dir(fs.filePath)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
+	}
+	
+	// Make sure the .snerdata directory is hidden on Windows
+	// On Unix-like systems, directories starting with a dot are already hidden
+	if runtime.GOOS == "windows" {
+		// For Windows, we'll use the attrib command to hide the directory
+		// Get the parent directory of our tasks folder to find the .snerdata folder
+		snerDataDir := filepath.Join(filepath.Dir(dirPath), ".snerdata")
+		// Use attrib command to set the hidden attribute
+		cmd := exec.Command("attrib", "+h", snerDataDir)
+		if err := cmd.Run(); err != nil {
+			// Just log the error but don't fail - hiding is a nice-to-have
+			fmt.Printf("Warning: Could not hide directory on Windows: %v\n", err)
+		}
 	}
 
 	fmt.Println("Opening file:", fs.filePath)
