@@ -2,6 +2,7 @@ package snerd
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -88,6 +89,7 @@ func ProcessInMemoryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGro
 // It polls for due tasks at the specified interval and processes them using the provided queue.
 // The function stops when the provided context is canceled.
 func ProcessRetryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGroup, interval time.Duration) {
+	fmt.Println("Starting retry queue processor for:", queue.Name())
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -103,6 +105,7 @@ func ProcessRetryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGroup,
 				return
 			case <-ticker.C:
 				// Process any tasks that are due
+				fmt.Println("Processing due tasks for queue:", queue.Name())
 				queue.ProcessDueTasks()
 			}
 		}
