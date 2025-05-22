@@ -216,7 +216,7 @@ func GetRegisteredTaskFactory(retryableTask RetryableTask) (func(id string, data
 	if !exists {
 		return nil, false
 	}
-
+	fmt.Println("Found factory for task type: any-task")
 	// Create a new factory
 	return func(id string, data string) (Task, error) {
 		task, err := factory(id, data)
