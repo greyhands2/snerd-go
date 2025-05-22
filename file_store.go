@@ -96,7 +96,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	
+
 	// Make sure the .snerdata directory is hidden on Windows
 	// On Unix-like systems, directories starting with a dot are already hidden
 	if runtime.GOOS == "windows" {
@@ -425,8 +425,8 @@ func (fs *FileStore) Compact() error {
 }
 
 func (fs *FileStore) shouldCompact() bool {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+	// NOTE: This method should only be called when the mutex is already held
+	// by the caller, so we don't need to lock again here
 
 	// File size threshold: > 20MB
 	if info, err := os.Stat(fs.filePath); err == nil && info.Size() > 20*1024*1024 {
