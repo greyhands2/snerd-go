@@ -316,22 +316,74 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 }
 
 // We use a soft deleting approach alongside compaction
+// getLatestTask returns the most recent version of a task by its ID
+// It scans the entire task log to find the most up-to-date version
+func (fs *FileStore) getLatestTask(taskID string) (*RetryableTask, error) {
+	file, err := os.Open(fs.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("task %s not found: log file does not exist", taskID)
+		}
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			fmt.Printf("Error closing file: %s\n", err)
+		}
+	}(file)
+
+	scanner := bufio.NewScanner(file)
+	var latest *RetryableTask
+
+	// Scan through the file to find the latest version of the task
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		var t RetryableTask
+		if err := json.Unmarshal([]byte(line), &t); err != nil {
+			fmt.Printf("unmarshal task: %v\n", err)
+			continue
+		}
+
+		// If this is the task we're looking for, update our latest reference
+		if t.TaskID == taskID {
+			latest = &t
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan file: %w", err)
+	}
+
+	if latest == nil {
+		return nil, fmt.Errorf("task with ID %s not found", taskID)
+	}
+
+	return latest, nil
+}
+
 func (fs *FileStore) DeleteTask(taskID string) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	now := time.Now()
-	// Construct the soft delete marker task
-	t := &RetryableTask{
-		TaskID:    taskID,
-		DeletedAt: &now, // pointer so nil vs non-nil matters
-		// Optional: keep previous values or add metadata if needed
+	// First find the existing task to preserve its data
+	existingTask, err := fs.getLatestTask(taskID)
+	if err != nil {
+		return fmt.Errorf("cannot delete task, error retrieving it: %w", err)
 	}
 
+	// Mark the task as deleted while preserving all other data
+	now := time.Now()
+	existingTask.DeletedAt = &now
+
 	// Marshal to JSON
-	data, err := json.Marshal(t)
+	data, err := json.Marshal(existingTask)
 	if err != nil {
-		return fmt.Errorf("marshal soft delete: %w", err)
+		return fmt.Errorf("marshal task for deletion: %w", err)
 	}
 
 	// Open the file for appending
@@ -339,7 +391,6 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-	fmt.Println("Opened file for appending")
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
@@ -355,11 +406,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 
 	// Track stats
 	fs.appendCount++
-	if t.DeletedAt != nil {
-		fs.deletedTasks++
-	} else {
-		fs.totalTasks++
-	}
+	fs.deletedTasks++ // This is a delete operation, so increment the deletedTasks counter
 
 	// Check if compaction should be triggered
 	if fs.shouldCompact() {
