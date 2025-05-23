@@ -42,35 +42,37 @@ func (t *RetryableTask) Execute() error {
 		return t.EmbeddedTask.Execute()
 	}
 
-	// No embedded task, try to reconstruct it from TaskType and TaskData
-	if t.TaskType != "" && t.TaskData != "" {
-		fmt.Println("Reconstructing embedded task from TaskType and TaskData!!!!!!!")
+	// No embedded task, try to execute using the registered task handler directly
+	if t.TaskType != "" {
+		// First try to get the task handler from the global registry
+		handlersMutex.RLock()
+		handler, exists := taskHandlers[t.TaskType]
+		handlersMutex.RUnlock()
+		
+		if exists && handler != nil {
+			// Convert RetryableTask to SnerdTask to extract parameters properly
+			snerdTask := FromRetryableTask(t)
+			
+			// Execute the task with its parameters
+			return handler(snerdTask.Parameters)
+		}
+		
+		// Fallback to legacy factory approach
 		factory, found := taskFactories[t.TaskType]
 		if found && factory != nil {
-			fmt.Println("Found factory for task type: " + t.TaskType)
 			// Use the factory to create a concrete task instance
 			concreteTask, err := factory(t.TaskID, t.TaskData)
 			if err == nil && concreteTask != nil {
-				fmt.Println("Successfully reconstructed embedded task of type: " + t.TaskType)
 				// Successfully reconstructed the task
 				t.EmbeddedTask = concreteTask
-				fmt.Printf("Task %s: reconstructed embedded task of type %s\n", t.TaskID, t.TaskType)
 				// Execute the reconstructed task
 				return t.EmbeddedTask.Execute()
-			} else if err != nil {
-				fmt.Printf("Error reconstructing task %s of type %s: %v\n", t.TaskID, t.TaskType, err)
 			}
-		} else {
-			fmt.Printf("No factory registered for task type %s\n", t.TaskType)
 		}
 	}
 
-	// Failed to reconstruct the task or no task data available
-	fmt.Printf("Task %s (type=%s) could not be executed - no implementation available\n",
-		t.TaskID, t.TaskType)
-
-	// This is effectively a no-op if task reconstruction fails
-	return nil
+	// If we reach here, we couldn't execute the task using any method
+	return fmt.Errorf("no handler or factory registered for task type: %s", t.TaskType)
 }
 
 func (t *RetryableTask) GetTaskID() string            { return t.TaskID }

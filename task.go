@@ -3,6 +3,7 @@ package snerd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -195,5 +196,62 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 // This is the simplified client API function for creating parameter-based tasks
 func CreateTask(taskID string, taskType string, parameters interface{}, maxRetries int, retryAfterHours float64) (*SnerdTask, error) {
 	return NewSnerdTask(taskID, taskType, parameters, maxRetries, retryAfterHours)
+}
+
+// FromRetryableTask creates a SnerdTask from a RetryableTask
+// This is used when loading tasks from the file store
+func FromRetryableTask(rt *RetryableTask) *SnerdTask {
+	// Create a new SnerdTask with the same core fields
+	task := &SnerdTask{
+		TaskID:          rt.TaskID,
+		RetryCount:      rt.RetryCount,
+		MaxRetries:      rt.MaxRetries,
+		RetryAfterHours: rt.RetryAfterHours,
+		RetryAfterTime:  rt.RetryAfterTime,
+		TaskType:        rt.TaskType,
+		LastErrorObj:    rt.LastErrorObj,
+		LastJobError:    rt.LastJobError,
+		CreatedAt:       rt.CreatedAt,
+		UpdatedAt:       rt.UpdatedAt,
+		DeletedAt:       rt.DeletedAt,
+	}
+	
+	// Extract the parameters from the task data
+	// First, try to use the TaskData directly if it looks like parameters
+	if rt.TaskType != "" && !strings.Contains(rt.TaskData, "parameters") {
+		// This is likely direct parameter data
+		task.Parameters = rt.TaskData
+		return task
+	}
+
+	// Otherwise, try to extract the parameters from the nested structure
+	var taskData map[string]interface{}
+	if err := json.Unmarshal([]byte(rt.TaskData), &taskData); err == nil {
+		// Look for the parameters field in the task data
+		if params, ok := taskData["parameters"]; ok {
+			// Convert to string if it's not already
+			if paramsStr, ok := params.(string); ok {
+				// This is the common case - parameters stored as a JSON string
+				task.Parameters = paramsStr
+				fmt.Printf("Extracted parameters from JSON string: %s\n", paramsStr)
+			} else {
+				// Try to marshal it to JSON
+				if paramsJSON, err := json.Marshal(params); err == nil {
+					task.Parameters = string(paramsJSON)
+					fmt.Printf("Marshalled parameters to JSON: %s\n", task.Parameters)
+				}
+			}
+		} else {
+			// No parameters field, maybe the TaskData itself is the parameters?
+			fmt.Printf("No parameters field found, using TaskData directly\n")
+			task.Parameters = rt.TaskData
+		}
+	} else {
+		// If we can't parse the TaskData as JSON, use it directly as parameters
+		fmt.Printf("Could not parse TaskData as JSON, using directly: %s\n", rt.TaskData)
+		task.Parameters = rt.TaskData
+	}
+	
+	return task
 }
 

@@ -222,7 +222,7 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 }
 
 // ReadDueTasks returns all tasks that are currently in the store that are due for execution
-// This filters out deleted tasks and returns only active tasks
+// This filters out deleted tasks and returns only active tasks whose retry time has passed
 func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	// Get all active tasks first
 	tasks, err := fs.ReadTasks()
@@ -230,10 +230,22 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 		return nil, fmt.Errorf("read tasks: %w", err)
 	}
 	
-	// No additional filtering is needed here - we'll let the caller determine
-	// which tasks are "due" based on their RetryAfterTime. We've already filtered
-	// out deleted tasks in ReadTasks()
-	return tasks, nil
+	// Filter tasks that are due for execution (their retry time has passed)
+	now := time.Now()
+	dueTasks := make([]*RetryableTask, 0, len(tasks))
+	
+	for _, task := range tasks {
+		if task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now) {
+			dueTasks = append(dueTasks, task)
+		}
+	}
+	
+	if len(dueTasks) > 0 {
+		fmt.Printf("Found %d tasks due for execution out of %d total tasks\n", 
+			len(dueTasks), len(tasks))
+	}
+	
+	return dueTasks, nil
 }
 
 func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {

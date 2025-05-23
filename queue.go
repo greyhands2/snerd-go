@@ -167,16 +167,21 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 			if err := task.Execute(); err != nil {
 				// Update retry configuration if we haven't exceeded max retries
 				if task.RetryCount < task.MaxRetries {
-					// Update retry count and error
-					task.RetryCount++
-					task.LastErrorObj = err
-
-					// Update task using FileStore's method
+					// Let the FileStore update the retry config and calculate the next retry time
+					// The UpdateTaskRetryConfig method will handle:
+					// 1. Incrementing retry count
+					// 2. Calculating proper next retry time
+					// 3. Storing the error information
 					if q.fileStore != nil {
 						if updateErr := q.fileStore.UpdateTaskRetryConfig(task.GetTaskID(), err); updateErr != nil {
 							fmt.Printf("Error updating task retry config: %v\n", updateErr)
 						} else {
-							fmt.Printf("Successfully updated task %s for retry\n", task.GetTaskID())
+							// Calculate and display when the next retry will happen
+							task.RetryCount++ // Local update for logging only
+							retryTime := time.Now().Add(time.Duration(task.RetryAfterHours * float64(time.Hour)))
+							fmt.Printf("Task %s failed with error: %v\n", task.GetTaskID(), err)
+							fmt.Printf("Scheduled for retry %d/%d at %s\n", 
+								task.RetryCount, task.MaxRetries, retryTime.Format(time.RFC3339))
 						}
 					} else {
 						// No filestore available, log an error
@@ -232,31 +237,33 @@ func (q *AnyQueue) ProcessDueTasks() {
 		fmt.Printf("Error reading tasks: %v\n", err)
 		return
 	}
-	var dueTasks []*RetryableTask
-	for _, t := range tasks {
-		if t.RetryAfterTime.Before(time.Now()) {
-			dueTasks = append(dueTasks, t)
-		}
-	}
-
-	fmt.Printf("Found %d due tasks\n", len(dueTasks))
+	
+	// No need to filter here, ReadDueTasks already returns only due tasks
+	fmt.Printf("Found %d due tasks\n", len(tasks))
 
 	// Step 2: Process each due task
-	for _, t := range dueTasks {
-		// Extract the SnerdTask from the RetryableTask wrapper
-		snerdTask, ok := t.EmbeddedTask.(*SnerdTask)
-		if !ok {
-			// Skip tasks that aren't SnerdTask type
-			fmt.Printf("Skipping non-SnerdTask: %s\n", t.TaskID)
+	for _, t := range tasks {
+		// Create a proper SnerdTask from the RetryableTask
+		snerdTask := FromRetryableTask(t)
+
+		// Log task execution with parameters for debugging
+		fmt.Printf("Executing task %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
+		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
+
+		// Get the task handler
+		handlersMutex.RLock()
+		handler, exists := taskHandlers[snerdTask.TaskType]
+		handlersMutex.RUnlock()
+		
+		if !exists || handler == nil {
+			fmt.Printf("No handler registered for task type: %s\n", snerdTask.TaskType)
 			continue
 		}
-
-		// Process SnerdTask
-		fmt.Printf("Executing task %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
-
-		// Execute the task using the registered handler
-		err := snerdTask.Execute()
+		
+		// Execute the handler with the task parameters
+		err := handler(snerdTask.Parameters)
 		if err != nil {
+			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
 			// Update retry configuration if we haven't exceeded max retries
