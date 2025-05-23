@@ -21,6 +21,7 @@ func init() {
 				return &RetryableTask{
 					TaskID:          id,
 					TaskData:        payload.TaskData,
+					TaskType:        "any-task",
 					RetryCount:      0,
 					MaxRetries:      5,
 					RetryAfterHours: 24,
