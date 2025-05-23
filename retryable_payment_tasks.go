@@ -10,24 +10,9 @@ import (
 	"time"
 )
 
-func init() {
-	// Register the task type for late-start membership payments
-	RegisterInitFunction(func() {
-		// Register a special task factory for any-task that handles raw task data directly
-		taskFactories["any-task"] = func(id string, data string) (Task, error) {
-			// For any-task, we can create a RetryableTask directly without additional unmarshaling
-			// since we're just storing the raw task data
-			return &RetryableTask{
-				TaskID:          id,
-				TaskData:        data, // Use the raw data directly
-				TaskType:        "any-task",
-				RetryCount:      0,
-				MaxRetries:      5,
-				RetryAfterHours: 24,
-			}, nil
-		}
-	})
-}
+// These declarations are already defined elsewhere in the codebase
+
+// Task factory registration happens elsewhere in the codebase
 
 // Path to the data folder - using a cross-platform approach to hidden folders
 const filePath = "./.snerdata/tasks/tasks.log"
@@ -62,24 +47,31 @@ func (t *RetryableTask) Execute() error {
 		return t.EmbeddedTask.Execute()
 	}
 
-	// No embedded task, try to reconstruct it from task type and data
+	// No embedded task, try to reconstruct it from TaskType and TaskData
 	if t.TaskType != "" && t.TaskData != "" {
-		// Try to use registered task factories to reconstruct the task
-		taskCopy := *t // Create a copy to pass to GetRegisteredTaskFactory
-		factory, found := GetRegisteredTaskFactory(taskCopy)
-		if found {
-			var err error
+		factory, found := taskFactories[t.TaskType]
+		if found && factory != nil {
+			// Use the factory to create a concrete task instance
 			concreteTask, err := factory(t.TaskID, t.TaskData)
 			if err == nil && concreteTask != nil {
-				// Successfully reconstructed the task, store it and execute
+				// Successfully reconstructed the task
 				t.EmbeddedTask = concreteTask
+				fmt.Printf("Task %s: reconstructed embedded task of type %s\n", t.TaskID, t.TaskType)
+				// Execute the reconstructed task
 				return t.EmbeddedTask.Execute()
+			} else if err != nil {
+				fmt.Printf("Error reconstructing task %s of type %s: %v\n", t.TaskID, t.TaskType, err)
 			}
+		} else {
+			fmt.Printf("No factory registered for task type %s\n", t.TaskType)
 		}
 	}
 
-	// For generic RetryableTask with no embedded task, this is a no-op
-	fmt.Println("Generic RetryableTask executed - no specific implementation")
+	// Failed to reconstruct the task or no task data available
+	fmt.Printf("Task %s (type=%s) could not be executed - no implementation available\n",
+		t.TaskID, t.TaskType)
+
+	// This is effectively a no-op if task reconstruction fails
 	return nil
 }
 
@@ -89,6 +81,53 @@ func (t *RetryableTask) GetMaxRetries() int           { return t.MaxRetries }
 func (t *RetryableTask) GetRetryAfterTime() time.Time { return t.RetryAfterTime }
 
 func (t *RetryableTask) GetRetryAfterHours() float64 { return t.RetryAfterHours }
+
+// MarshalJSON implements the json.Marshaler interface to ensure proper serialization of RetryableTask
+func (t *RetryableTask) MarshalJSON() ([]byte, error) {
+	// Create an Alias struct without the EmbeddedTask field to avoid infinite recursion
+	type Alias struct {
+		TaskID          string          `json:"taskId"`
+		RetryCount      int             `json:"retryCount"`
+		MaxRetries      int             `json:"maxRetries"`
+		RetryAfterHours float64         `json:"retryAfterHours"`
+		RetryAfterTime  time.Time       `json:"retryAfterTime"`
+		TaskData        string          `json:"taskData"`
+		TaskType        string          `json:"taskType"`
+		LastErrorObj    error           `json:"LastErrorObj"`
+		LastJobError    *JobErrorReturn `json:"LastJobError"`
+	}
+
+	// Before serializing, ensure TaskData has the latest data from EmbeddedTask
+	if t.EmbeddedTask != nil {
+		// This part is critical: serialize the embedded task to JSON and store it in TaskData
+		taskData, err := json.Marshal(t.EmbeddedTask)
+		if err == nil {
+			// Update TaskData with the serialized embedded task
+			t.TaskData = string(taskData)
+			fmt.Printf("Task %s: serialized embedded task data of type %s\n", t.TaskID, t.TaskType)
+		} else {
+			fmt.Printf("Warning: Could not serialize embedded task data for task %s: %v\n", t.TaskID, err)
+		}
+	}
+
+	alias := Alias{
+		TaskID:          t.TaskID,
+		RetryCount:      t.RetryCount,
+		MaxRetries:      t.MaxRetries,
+		RetryAfterHours: t.RetryAfterHours,
+		RetryAfterTime:  t.RetryAfterTime,
+		TaskData:        t.TaskData,
+		TaskType:        t.TaskType,
+		LastErrorObj:    t.LastErrorObj,
+		LastJobError:    t.LastJobError,
+	}
+
+	// Standard json.Marshal produces compact JSON without indentation or newlines
+	// which works perfectly with the line-by-line storage in the .snerdata task log
+	return json.Marshal(alias)
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface to properly deserialize a RetryableTask
 func (t *RetryableTask) UnmarshalJSON(data []byte) error {
 	// Use a temporary struct without the EmbeddedTask field to avoid infinite recursion
 	type Alias struct {
