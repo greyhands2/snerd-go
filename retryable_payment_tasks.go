@@ -13,21 +13,19 @@ import (
 func init() {
 	// Register the task type for late-start membership payments
 	RegisterInitFunction(func() {
-		RegisterTaskType(
-			"any-task",
-			func(id string, payload struct {
-				TaskData string `json:"taskData"`
-			}) Task {
-				return &RetryableTask{
-					TaskID:          id,
-					TaskData:        payload.TaskData,
-					TaskType:        "any-task",
-					RetryCount:      0,
-					MaxRetries:      5,
-					RetryAfterHours: 24,
-				}
-			},
-		)
+		// Register a special task factory for any-task that handles raw task data directly
+		taskFactories["any-task"] = func(id string, data string) (Task, error) {
+			// For any-task, we can create a RetryableTask directly without additional unmarshaling
+			// since we're just storing the raw task data
+			return &RetryableTask{
+				TaskID:          id,
+				TaskData:        data, // Use the raw data directly
+				TaskType:        "any-task",
+				RetryCount:      0,
+				MaxRetries:      5,
+				RetryAfterHours: 24,
+			}, nil
+		}
 	})
 }
 
@@ -221,8 +219,11 @@ func GetRegisteredTaskFactory(retryableTask RetryableTask) (func(id string, data
 	fmt.Println("YES Found factory for task type: any-task")
 	// Create a new factory
 	return func(id string, data string) (Task, error) {
+		// Handle both empty and non-empty task data
 		task, err := factory(id, data)
 		if err != nil {
+			// For debugging purposes
+			fmt.Printf("Error in factory for task %s: %v, data: '%s'\n", id, err, data)
 			return nil, err
 		}
 
@@ -259,8 +260,13 @@ func RegisterTaskType[P any](
 ) {
 	taskFactories[taskType] = func(id string, data string) (Task, error) {
 		var payload P
-		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			return nil, fmt.Errorf("error unmarshaling task data: %w", err)
+		// Only try to unmarshal if we actually have data
+		if data != "" {
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				return nil, fmt.Errorf("error unmarshaling task data: %w", err)
+			}
+		} else {
+			fmt.Println("Empty task data, skipping unmarshal for task type:", taskType)
 		}
 		return creator(id, payload), nil
 	}
