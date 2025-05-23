@@ -1,6 +1,7 @@
 package snerd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -99,12 +100,20 @@ func (q *AnyQueue) Enqueue(task Task) error {
 		retryTask.TaskType = "any-task"
 	}
 
-	// If task implements TaskWithData, serialize its data
-	if taskWithData, ok := task.(TaskWithData); ok {
-		data, err := taskWithData.MarshalData()
-		if err != nil {
-			return fmt.Errorf("failed to marshal task data: %w", err)
-		}
+	// Get task type for diagnostic purposes only
+	if taskWithType, ok := task.(interface{ GetTaskType() string }); ok {
+		retryTask.TaskType = taskWithType.GetTaskType()
+		fmt.Println("Setting task type to:", retryTask.TaskType)
+	} else {
+		retryTask.TaskType = "any-task"
+	}
+
+	// Store minimal task data for diagnostic/debugging purposes
+	// The actual execution will use the embedded task directly
+	if data, err := json.Marshal(map[string]string{
+		"type": retryTask.TaskType,
+		"id":   retryTask.TaskID,
+	}); err == nil {
 		retryTask.TaskData = string(data)
 	}
 	fmt.Println("Retryable task data:", retryTask)
@@ -132,30 +141,28 @@ func (q *AnyQueue) processTask(task Task) {
 }
 
 // ProcessDueTasks processes all tasks that are due for execution.
-// It uses registered task factories to reconstruct and execute retryable tasks.
+// It uses the embedded task's execute method directly.
 // This method is typically called periodically, either by a ticker or a scheduler.
-func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
-	// Automatically ensure all task types are registered internally
-	// This removes the burden from client code
-	EnsureTaskTypesRegistered()
+func (q *AnyQueue) ProcessDueTasks() {
+	fmt.Println("Processing due tasks for queue:", q.name)
 
-	fmt.Println("Processing due tasks for queue:", q.Name())
 	// Fetch tasks due for execution
-	tasks, err := FetchDueTasks()
+	retryTasks, err := FetchDueTasks()
 	if err != nil {
-		fmt.Println("Error fetching retry tasks:", err)
+		fmt.Printf("Error fetching due tasks: %v\n", err)
 		return
 	}
 
-	fmt.Println("THE TASKS LENGTH IS", len(tasks))
+	if len(retryTasks) > 0 {
+		fmt.Printf("Found %d tasks to process\n", len(retryTasks))
+	}
 
-	for _, t := range tasks {
-		var task Task
-		var factoryErr error
+	for _, t := range retryTasks {
+		// Debug info
+		fmt.Printf("Executing task %s (type=%s)\n", t.TaskID, t.TaskType)
 
-		// Try to find a task factory based on task type
-		// Create a new RetryableTask as a wrapper for execution
-		taskWrapper := RetryableTask{
+		// Create a wrapper task that will be executed
+		taskWrapper := &RetryableTask{
 			TaskID:          t.TaskID,
 			RetryCount:      t.RetryCount,
 			MaxRetries:      t.MaxRetries,
@@ -163,41 +170,11 @@ func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
 			RetryAfterTime:  t.RetryAfterTime,
 			TaskData:        t.TaskData,
 			TaskType:        t.TaskType,
-		}
-		
-		// First try the custom factory if provided
-		if len(customFactory) > 0 && customFactory[0] != nil {
-			task, factoryErr = customFactory[0](t.TaskID, t.TaskData)
-			if factoryErr == nil {
-				taskWrapper.EmbeddedTask = task
-			}
-		} else if t.TaskData != "" {
-			// If we have task data, try to reconstruct the specific task
-			// In a real implementation, you'd use a more sophisticated mechanism here
-			// such as having a data envelope that includes the concrete type
-			fmt.Printf("Reconstructing task %s from data directly\n", t.TaskID)
-			var embedded Task = &taskWrapper
-			
-			// Check if the client code registered any task handlers
-			// This is an optional fallback, not a requirement
-			EnsureTaskTypesRegistered()
-			factory, found := GetRegisteredTaskFactory(t)
-			if found {
-				embedded, factoryErr = factory(t.TaskID, t.TaskData)
-			}
-			
-			taskWrapper.EmbeddedTask = embedded
-			task = &taskWrapper
-		} else {
-			// Simple case - no data, just use the wrapper task directly
-			task = &taskWrapper
-			factoryErr = nil
+			EmbeddedTask:    t.EmbeddedTask,
 		}
 
-		if factoryErr != nil {
-			fmt.Printf("Error creating task instance for %s: %v\n", t.TaskID, factoryErr)
-			continue
-		}
+		// Simple, direct task execution
+		var task Task = taskWrapper
 
 		fmt.Printf("Executing task %s (type=%s)\n", t.TaskID, t.TaskType)
 

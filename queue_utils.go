@@ -87,24 +87,25 @@ func ProcessInMemoryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGro
 
 // ProcessRetryQueue starts a background goroutine that periodically processes retryable tasks.
 // It polls for due tasks at the specified interval and processes them using the provided queue.
-// The function stops when the provided context is canceled.
+// ProcessRetryQueue starts a goroutine that processes a queue at regular intervals.
 func ProcessRetryQueue(ctx context.Context, queue *AnyQueue, wg *sync.WaitGroup, interval time.Duration) {
 	fmt.Println("Starting retry queue processor for:", queue.Name())
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		// Check for tasks to process every 30 seconds instead of continuously
+		// First, immediately process any due tasks
+		queue.ProcessDueTasks()
+
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
-				log.Printf("Stopping retry queue processor for: %s", queue.Name())
+				fmt.Println("Stopping retry queue processor")
 				return
 			case <-ticker.C:
-				// Process any tasks that are due
 				fmt.Println("Processing due tasks for queue:", queue.Name())
 				queue.ProcessDueTasks()
 			}
