@@ -17,11 +17,6 @@ import (
 // Path to the data folder - using a cross-platform approach to hidden folders
 const filePath = "./.snerdata/tasks/tasks.log"
 
-type JobErrorReturn struct {
-	ErrorObj    error
-	RetryWorthy bool
-}
-
 // Task with retries
 type RetryableTask struct {
 	TaskID          string    `json:"taskId"`
