@@ -173,7 +173,10 @@ func (q *AnyQueue) ProcessDueTasks() {
 			EmbeddedTask:    t.EmbeddedTask,
 		}
 
-		fmt.Printf("Executing task %s (type=%s) with embedded task %v\n", t.TaskID, t.TaskType, t.EmbeddedTask)
+		// Simple, direct task execution
+		var task Task = taskWrapper.EmbeddedTask
+
+		fmt.Printf("Executing task %s (type=%s) with embedded task %v\n", t.TaskID, t.TaskType, task)
 
 		// Execute the task
 		err := taskWrapper.Execute()
