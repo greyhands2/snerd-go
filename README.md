@@ -2,201 +2,436 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
 
-A Go library for in-memory and persistent retryable task queues.
+A Go library for parameter-based task execution with persistent storage and automatic retries.
 
 ## Features
-- In-memory and persistent (file-backed) queues
-- Retryable tasks with configurable retry logic
-- Task factories and extensibility for custom task types
-- Periodic processing of retryable tasks using context and ticker
+- Parameter-based task execution system (no need to implement interfaces)
+- Persistent task storage in a hidden `.snerdata` folder
+- Automatic task retries with configurable retry logic
+- Centralized task handler registration
+- Error tracking with detailed failure information
+- Background processing of tasks
 
 ---
 
-## Full Example: In-Memory Tasks
+## Example: Email Sending Task
 
-> **Note:** All examples use the import alias `snerd` for clarity.
+Email sending is a perfect use case for the task system as it can be retried if the mail server is temporarily unavailable.
+
+### 1. Register the Email Task Handler
 
 ```go
 package main
 
 import (
+    "encoding/json"
     "fmt"
-    snerd "github.com/greyhands2/snerd-go"
-)
-
-type PrintTask struct {
-    ID    string
-    Count int
-}
-
-func (t *PrintTask) GetTaskID() string  { return t.ID }
-func (t *PrintTask) GetRetryCount() int { return 0 }
-func (t *PrintTask) Execute() error {
-    fmt.Printf("[PrintTask] Executing task %s, count=%d\n", t.ID, t.Count)
-    return nil
-}
-
-func main() {
-    // Create an in-memory queue
-    q := snerd.NewAnyQueue("example-queue", 10)
-
-    // Enqueue tasks
-    q.Enqueue(&PrintTask{ID: "task1", Count: 1})
-    q.Enqueue(&PrintTask{ID: "task2", Count: 2})
-    q.Enqueue(&PrintTask{ID: "task3", Count: 3})
-    // Tasks are processed automatically in the background
-}
-```
-
----
-
-## Full Example: Retryable Tasks (Sending Email)
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "sync"
+    "net/smtp"
     "time"
     snerd "github.com/greyhands2/snerd-go"
 )
 
-type SendEmailTask struct {
-    ID         string
-    RetryCount int
-    To         string
-    Subject    string
-    Body       string
-}
-
-func (t *SendEmailTask) GetTaskID() string  { return t.ID }
-func (t *SendEmailTask) GetRetryCount() int { return t.RetryCount }
-func (t *SendEmailTask) Execute() error {
-    fmt.Printf("[SendEmailTask] Sending email to %s: %s\n%s\n", t.To, t.Subject, t.Body)
-    // Simulate sending failure to trigger retry
-    return fmt.Errorf("failed to send email (simulated)")
-}
-
-// Implement TaskWithMaxRetryCallback to handle max retries
-func (t *SendEmailTask) OnMaxRetryReached(contextProvider func() interface{}) error {
-    // The contextProvider can return the task itself or additional info
-    failedEmail, ok := contextProvider().(*SendEmailTask)
-    if !ok {
-        fmt.Printf("[SendEmailTask] Max retries reached for task %s, but context is missing or wrong type.\n", t.ID)
+// Register the task handler for sending emails
+func registerEmailHandler() {
+    snerd.RegisterTaskHandler("email-send", func(parameters string) error {
+        // Parse parameters
+        var params struct {
+            To      string `json:"to"`
+            From    string `json:"from"`
+            Subject string `json:"subject"`
+            Body    string `json:"body"`
+            SMTP    struct {
+                Server   string `json:"server"`
+                Port     int    `json:"port"`
+                Username string `json:"username"`
+                Password string `json:"password"`
+            } `json:"smtp"`
+        }
+        if err := json.Unmarshal([]byte(parameters), &params); err != nil {
+            return fmt.Errorf("failed to parse email parameters: %w", err)
+        }
+        
+        // Create email message
+        message := fmt.Sprintf("From: %s\nTo: %s\nSubject: %s\n\n%s",
+            params.From, params.To, params.Subject, params.Body)
+            
+        // Set up SMTP authentication
+        auth := smtp.PlainAuth("", params.SMTP.Username, params.SMTP.Password, params.SMTP.Server)
+        
+        // Connect to the server and send the email
+        addr := fmt.Sprintf("%s:%d", params.SMTP.Server, params.SMTP.Port)
+        err := smtp.SendMail(addr, auth, params.From, []string{params.To}, []byte(message))
+        if err != nil {
+            return fmt.Errorf("failed to send email: %w", err)
+        }
+        
+        fmt.Printf("Email sent successfully to %s\n", params.To)
         return nil
-    }
-    fmt.Printf("[SendEmailTask] Max retries reached for email to %s. Subject: '%s'. Body: '%s'\n", failedEmail.To, failedEmail.Subject, failedEmail.Body)
-    // Here you could log to a file, alert an admin, etc.
-    return nil
-}
-
-func main() {
-    // Register your retryable task type if needed (see your library's registration system)
-    // snerd.RegisterTaskType(...)
-
-    // Create a queue for retryable tasks
-    q := snerd.NewAnyQueue("retry-queue", 10)
-
-    // Enqueue a retryable email task
-    q.Enqueue(&SendEmailTask{
-        ID:         "email1",
-        RetryCount: 0,
-        To:         "user@example.com",
-        Subject:    "Welcome!",
-        Body:       "Thanks for signing up.",
     })
-
-    ctx, cancel := context.WithCancel(context.Background())
-    defer cancel()
-    var wg sync.WaitGroup
-
-    // Start processing retryable tasks every 30 seconds
-    snerd.ProcessRetryQueue(ctx, q, &wg, 30*time.Second)
-
-    // Let it run for a while (for demo purposes)
-    time.Sleep(2 * time.Minute)
-    cancel()
-    wg.Wait()
+    
+    // Register max retry handler
+    snerd.RegisterMaxRetryHandler("email-send", func(parameters string) error {
+        var params struct {
+            To      string `json:"to"`
+            Subject string `json:"subject"`
+        }
+        if err := json.Unmarshal([]byte(parameters), &params); err != nil {
+            return err
+        }
+        
+        fmt.Printf("Failed to send email to %s with subject '%s' after multiple attempts\n", 
+            params.To, params.Subject)
+        // Here you could log to a database or notify an admin
+        return nil
+    })
 }
 ```
 
-**Note:** The `OnMaxRetryReached` method will be called by the queue system when the maximum number of retries is reached for a task implementing `TaskWithMaxRetryCallback`. Here, we access the failed email's details from the context and log them, but you could also notify an admin or take other action.
+### 2. Creating and Enqueuing an Email Task
+
+```go
+// Create and enqueue an email task
+func sendWelcomeEmail(userEmail, userName string) error {
+    // Create the email task
+    emailTask, err := snerd.CreateTask(
+        "welcome-"+userEmail,  // Unique task ID
+        "email-send",         // Task type
+        map[string]interface{}{
+            "to":      userEmail,
+            "from":    "welcome@example.com",
+            "subject": "Welcome to Our Service",
+            "body":    fmt.Sprintf("Hello %s,\n\nWelcome to our service! We're excited to have you on board.\n\nRegards,\nThe Team", userName),
+            "smtp": map[string]interface{}{
+                "server":   "smtp.example.com",
+                "port":     587,
+                "username": "smtp-user",
+                "password": "smtp-password", // In production, use a secure way to handle credentials
+            },
+        },
+        5,     // Max retries
+        0.25,  // Retry interval in hours (15 minutes)
+    )
+    if err != nil {
+        return fmt.Errorf("failed to create email task: %w", err)
+    }
+    
+    // Get the queue and enqueue the task
+    queue := snerd.NewAnyQueue("email-queue", 100)
+    return queue.EnqueueSnerdTask(emailTask)
+}
+```
+
+## Example: Image Processing Task
+
+Image processing is a resource-intensive operation that's well-suited for background processing.
+
+### 1. Register the Image Processing Handler
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "image"
+    "image/jpeg"
+    "image/png"
+    "os"
+    "path/filepath"
+    "strings"
+    
+    "github.com/nfnt/resize"
+    snerd "github.com/greyhands2/snerd-go"
+)
+
+// Register handlers for image processing
+func registerImageHandlers() {
+    // Handler for resizing images
+    snerd.RegisterTaskHandler("image-resize", func(parameters string) error {
+        // Parse parameters
+        var params struct {
+            SourcePath string `json:"sourcePath"`
+            TargetPath string `json:"targetPath"`
+            Width      uint   `json:"width"`
+            Height     uint   `json:"height"`
+            Quality    int    `json:"quality"`
+        }
+        if err := json.Unmarshal([]byte(parameters), &params); err != nil {
+            return fmt.Errorf("failed to parse image parameters: %w", err)
+        }
+        
+        // Open the source image
+        file, err := os.Open(params.SourcePath)
+        if err != nil {
+            return fmt.Errorf("failed to open source image: %w", err)
+        }
+        defer file.Close()
+        
+        // Decode the image
+        img, format, err := image.Decode(file)
+        if err != nil {
+            return fmt.Errorf("failed to decode image: %w", err)
+        }
+        
+        // Resize the image
+        resized := resize.Resize(params.Width, params.Height, img, resize.Lanczos3)
+        
+        // Ensure target directory exists
+        targetDir := filepath.Dir(params.TargetPath)
+        if err := os.MkdirAll(targetDir, 0755); err != nil {
+            return fmt.Errorf("failed to create target directory: %w", err)
+        }
+        
+        // Create the output file
+        out, err := os.Create(params.TargetPath)
+        if err != nil {
+            return fmt.Errorf("failed to create output file: %w", err)
+        }
+        defer out.Close()
+        
+        // Save the resized image
+        switch strings.ToLower(format) {
+        case "jpeg", "jpg":
+            err = jpeg.Encode(out, resized, &jpeg.Options{Quality: params.Quality})
+        case "png":
+            err = png.Encode(out, resized)
+        default:
+            return fmt.Errorf("unsupported image format: %s", format)
+        }
+        
+        if err != nil {
+            return fmt.Errorf("failed to encode output image: %w", err)
+        }
+        
+        fmt.Printf("Successfully resized image from %s to %s\n", 
+            params.SourcePath, params.TargetPath)
+        return nil
+    })
+}
+```
+
+### 2. Creating and Enqueuing an Image Processing Task
+
+```go
+// Function to create and enqueue an image processing task
+func resizeUserProfileImage(originalPath, userId string) error {
+    // Prepare the target paths for different sizes
+    basePath := filepath.Dir(originalPath)
+    fileName := filepath.Base(originalPath)
+    extension := filepath.Ext(fileName)
+    nameWithoutExt := strings.TrimSuffix(fileName, extension)
+    
+    // Create paths for thumbnail and medium-sized images
+    thumbnailPath := filepath.Join(basePath, nameWithoutExt + "-thumb" + extension)
+    mediumPath := filepath.Join(basePath, nameWithoutExt + "-medium" + extension)
+    
+    // Create thumbnail task
+    thumbTask, err := snerd.CreateTask(
+        "thumb-" + userId,
+        "image-resize",
+        map[string]interface{}{
+            "sourcePath": originalPath,
+            "targetPath": thumbnailPath,
+            "width":      100,
+            "height":     100,
+            "quality":    85,
+        },
+        3,      // Max retries
+        0.0083, // Retry interval (30 seconds)
+    )
+    if err != nil {
+        return fmt.Errorf("failed to create thumbnail task: %w", err)
+    }
+    
+    // Create medium-size task
+    mediumTask, err := snerd.CreateTask(
+        "medium-" + userId,
+        "image-resize",
+        map[string]interface{}{
+            "sourcePath": originalPath,
+            "targetPath": mediumPath,
+            "width":      400,
+            "height":     0,  // 0 means maintain aspect ratio
+            "quality":    90,
+        },
+        3,      // Max retries
+        0.0083, // Retry interval (30 seconds)
+    )
+    if err != nil {
+        return fmt.Errorf("failed to create medium-size task: %w", err)
+    }
+    
+    // Get queue and enqueue both tasks
+    queue := snerd.NewAnyQueue("image-queue", 100)
+    if err := queue.EnqueueSnerdTask(thumbTask); err != nil {
+        return fmt.Errorf("failed to enqueue thumbnail task: %w", err)
+    }
+    if err := queue.EnqueueSnerdTask(mediumTask); err != nil {
+        return fmt.Errorf("failed to enqueue medium-size task: %w", err)
+    }
+    
+    fmt.Printf("Enqueued image processing tasks for user %s\n", userId)
+    return nil
+}
+```
+
+## Example: Using Both Task Types Together
+
+Here's how you might use both email and image processing tasks in a user registration flow:
+
+```go
+func main() {
+    // Register all task handlers
+    registerEmailHandler()
+    registerImageHandlers()
+    
+    // Start the application
+    fmt.Println("Starting application with background task processing...")
+    
+    // Simulate user registration with profile image upload
+    userId := "user123"
+    userEmail := "new.user@example.com"
+    userName := "John Doe"
+    profileImagePath := "/uploads/original/profile123.jpg"
+    
+    // Process the user's profile image
+    if err := resizeUserProfileImage(profileImagePath, userId); err != nil {
+        fmt.Printf("Error processing profile image: %v\n", err)
+    }
+    
+    // Send welcome email
+    if err := sendWelcomeEmail(userEmail, userName); err != nil {
+        fmt.Printf("Error sending welcome email: %v\n", err)
+    }
+    
+    fmt.Println("User registration complete. Background tasks will process automatically.")
+    
+    // In a real application, you would keep the server running
+    // Here we just wait a bit to let tasks process
+    time.Sleep(time.Second * 30)
+    fmt.Println("Application shutting down.")
+}
+```
+
 ---
 
-## Example Usage
+## Creating a Non-Retryable Task
 
-### 1. Import the library
+To create a task that executes exactly once and is not retried on failure, simply set `MaxRetries` to 0:
+
 ```go
-import (
-    "context"
-    "fmt"
-    "sync"
-    "time"
-    snerd "github.com/greyhands2/snerd-go"
+// Create a non-retryable task
+nonRetryableTask, err := snerd.CreateTask(
+    "oneshot1",
+    "send-notification",
+    map[string]string{
+        "message": "This is a one-time notification",
+        "channel": "alerts",
+    },
+    0,      // MaxRetries = 0 means no retries
+    0,      // RetryInterval doesn't matter for non-retryable tasks
+)
+if err != nil {
+    panic(err)
+}
+queue.EnqueueSnerdTask(nonRetryableTask)
+```
+
+**Note:** Even non-retryable tasks are stored in the file store for audit and recovery purposes. They'll be deleted automatically after execution.
+---
+
+## API Reference
+
+### Registering Task Handlers
+
+Register handlers for your task types at application startup:
+
+```go
+// Register a task handler for "email-send" tasks
+snerd.RegisterTaskHandler("email-send", func(parameters string) error {
+    // Parse parameters from JSON string
+    var params struct {
+        To      string `json:"to"`
+        Subject string `json:"subject"`
+        Body    string `json:"body"`
+    }
+    if err := json.Unmarshal([]byte(parameters), &params); err != nil {
+        return err
+    }
+    
+    // Task implementation logic
+    // ...
+    return nil
+})
+```
+
+### Registering Max Retry Handlers (Optional)
+
+Optionally register handlers for when tasks reach their maximum retry limit:
+
+```go
+// Register a max retry handler for "email-send" tasks
+snerd.RegisterMaxRetryHandler("email-send", func(parameters string) error {
+    var params struct {
+        To      string `json:"to"`
+        Subject string `json:"subject"`
+    }
+    if err := json.Unmarshal([]byte(parameters), &params); err != nil {
+        return err
+    }
+    
+    // Log or notify about the permanently failed task
+    fmt.Printf("Failed to send email to %s after max retries\n", params.To)
+    return nil
+})
+```
+
+### Creating Tasks
+
+Create tasks with parameters using the CreateTask helper function:
+
+```go
+// Create a task with parameters
+task, err := snerd.CreateTask(
+    "unique-task-id",     // Unique identifier for this task
+    "task-type",          // Task type (must match a registered handler)
+    map[string]string{    // Parameters for the task
+        "key1": "value1",
+        "key2": "value2",
+    },
+    5,                    // Maximum number of retries (0 for non-retryable)
+    0.25,                 // Retry interval in hours (0.25 = 15 minutes)
 )
 ```
 
-### 2. Define a Normal (In-Memory) Task
-```go
-// Implement the Task interface
- type PrintTask struct {
-     ID    string
-     Count int
- }
+### Enqueueing Tasks
 
- func (t *PrintTask) GetTaskID() string    { return t.ID }
- func (t *PrintTask) GetRetryCount() int   { return 0 }
- func (t *PrintTask) Execute() error {
-     fmt.Printf("[PrintTask] Executing task %s, count=%d\n", t.ID, t.Count)
-     return nil
- }
-```
-
-### 3. Define a Retryable Task
-```go
-// Implement the Task interface and optionally TaskWithMaxRetryCallback
- type MyRetryableTask struct {
-     ID         string
-     RetryCount int
- }
-
- func (t *MyRetryableTask) GetTaskID() string  { return t.ID }
- func (t *MyRetryableTask) GetRetryCount() int { return t.RetryCount }
- func (t *MyRetryableTask) Execute() error {
-     fmt.Printf("[MyRetryableTask] Executing retryable task %s, retry=%d\n", t.ID, t.RetryCount)
-     // Return an error to trigger retry logic
-     return fmt.Errorf("simulate failure")
- }
-```
-
-### 4. Create and Use a Queue
-```go
-// Create an in-memory queue
-q := snerd.NewAnyQueue("example-queue", 10)
-
-// Enqueue a normal task
-q.Enqueue(&PrintTask{ID: "task1", Count: 1})
-
-// Enqueue a retryable task (using your factory/registration system)
-// See your codebase for registering custom retryable task types
-```
-
-### 5. Process In-Memory Tasks
-For in-memory tasks, simply calling `Enqueue()` is sufficient—the queue will process the task immediately in the background. No background processor or polling is needed!
+Add tasks to the queue for execution:
 
 ```go
-q.Enqueue(&PrintTask{ID: "task1", Count: 1})
-q.Enqueue(&PrintTask{ID: "task2", Count: 2})
-// ...
+// Create a queue
+queue := snerd.NewAnyQueue("my-queue", 10)
+
+// Enqueue the task
+queue.EnqueueSnerdTask(task)
 ```
 
-If you want to monitor or synchronize task completion, you can use your own `sync.WaitGroup` or other mechanism.
+### Error Handling
 
-### 6. Process Retryable Tasks Periodically
+Error information is automatically tracked for failed tasks:
 
-You can process retryable tasks continuously by running a background goroutine (as above), or you can use a cron job or external scheduler to trigger processing at fixed intervals.
+1. When a task fails, the error is captured and stored with the task
+2. The retry count is incremented
+3. The task is scheduled for retry after the specified interval
+4. If max retries is reached, the max retry handler is called (if registered)
+
+### Task Storage
+
+All tasks are stored in a hidden `.snerdata` folder for persistence. This ensures:
+
+1. Tasks survive application restarts
+2. Failed tasks can be retried later
+3. Task execution history is preserved
 
 #### Example: Using a Go Cron Library
 ```go

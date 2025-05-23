@@ -171,34 +171,40 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	f, err := os.Open(fs.filePath)
+	file, err := os.Open(fs.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// No tasks file yet; return empty slice, not an error
+			// Return empty slice if file doesn't exist yet
 			return []*RetryableTask{}, nil
 		}
 		return nil, fmt.Errorf("open file: %w", err)
 	}
-	defer func(f *os.File) {
-		if err := f.Close(); err != nil {
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
 			fmt.Printf("Error closing file: %s\n", err)
+			return
 		}
-	}(f)
+	}(file)
 
-	// Map to keep latest version of each task by ID
+	// Build map of latest tasks by ID
 	taskMap := make(map[string]*RetryableTask)
-
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-
 		var t RetryableTask
 		if err := json.Unmarshal(line, &t); err != nil {
 			fmt.Printf("unmarshal task: %v\n", err)
 			continue
 		}
 
-		// Always overwrite — assuming each line is an event (append-only)
+		// Skip deleted tasks
+		if t.DeletedAt != nil {
+			delete(taskMap, t.TaskID)
+			continue
+		}
+
+		// Store the latest version of the task
 		taskMap[t.TaskID] = &t
 	}
 
@@ -206,14 +212,27 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 		return nil, fmt.Errorf("scan file: %w", err)
 	}
 
-	// Filter out tasks that are soft-deleted in their latest version
-	var tasks []*RetryableTask
-	for _, t := range taskMap {
-		if t.DeletedAt == nil {
-			tasks = append(tasks, t)
-		}
+	// Convert map to slice
+	tasks := make([]*RetryableTask, 0, len(taskMap))
+	for _, task := range taskMap {
+		tasks = append(tasks, task)
 	}
 
+	return tasks, nil
+}
+
+// ReadDueTasks returns all tasks that are currently in the store that are due for execution
+// This filters out deleted tasks and returns only active tasks
+func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
+	// Get all active tasks first
+	tasks, err := fs.ReadTasks()
+	if err != nil {
+		return nil, fmt.Errorf("read tasks: %w", err)
+	}
+	
+	// No additional filtering is needed here - we'll let the caller determine
+	// which tasks are "due" based on their RetryAfterTime. We've already filtered
+	// out deleted tasks in ReadTasks()
 	return tasks, nil
 }
 

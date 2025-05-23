@@ -2,8 +2,6 @@ package snerd
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,13 +12,11 @@ import (
 	"time"
 )
 
-// AnyQueue is a thread-safe queue that supports both in-memory and retryable (persistent) tasks.
-// It manages task execution, retry logic, and queue statistics.
+// AnyQueue is a thread-safe queue that manages SnerdTask execution, retry logic, and statistics
 type AnyQueue struct {
 	name            string
 	maxSize         int
 	mu              sync.Mutex
-	activeTasks     map[string]Task // In-memory queue
 	totalEnqueued   int64
 	totalDequeued   int64
 	fileStore       *FileStore
@@ -29,8 +25,11 @@ type AnyQueue struct {
 	processorCancel context.CancelFunc
 }
 
+// TaskFactory creates a Task from its stored data.
+// The factory function is responsible for reconstructing a Task instance, including unmarshaling any stored data.
+type TaskFactory func(id string, data string) (Task, error)
+
 // NewAnyQueue creates a new queue with the given parameters
-// This constructor is highly flexible for backward compatibility and can handle any existing call patterns
 func NewAnyQueue(args ...interface{}) *AnyQueue {
 	var name string = "default-queue"
 	var maxSize int = 100                                    // reasonable default
@@ -53,7 +52,6 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 	q := &AnyQueue{
 		name:            name,
 		maxSize:         maxSize,
-		activeTasks:     make(map[string]Task),
 		processorActive: false,
 	}
 
@@ -134,93 +132,15 @@ func (q *AnyQueue) StopProcessor() {
 	q.processorActive = false
 }
 
-// Enqueue adds a Task to the queue for processing.
-// This method now supports both traditional Task objects and the new SnerdTask objects
-// for a simpler parameter-based API.
+// Enqueue adds a task to the queue
 func (q *AnyQueue) Enqueue(task Task) error {
-	// Handle SnerdTask specially with the optimized method
+	// Handle SnerdTask directly
 	if snerdTask, ok := task.(*SnerdTask); ok {
 		return q.EnqueueSnerdTask(snerdTask)
 	}
 
-	atomic.AddInt64(&q.totalEnqueued, 1)
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	// Check if this is a retryable task or in-memory task
-	_, isRetryable := task.(interface {
-		GetMaxRetries() int
-		GetRetryAfterHours() float64
-	})
-
-	// For non-retryable memory-only tasks
-	if !isRetryable {
-		// This is a simple in-memory task with no retries
-		if len(q.activeTasks) >= q.maxSize {
-			return errors.New("queue is full: rejecting new task")
-		}
-		q.activeTasks[task.GetTaskID()] = task
-		go q.processTask(task)
-		return nil
-	}
-	fmt.Println("Enqueueing retryable task:", task.GetTaskID())
-	// For retryable tasks, store in the file store with task-specific retry settings
-	retryTask := RetryableTask{
-		TaskID:       task.GetTaskID(),
-		RetryCount:   task.GetRetryCount(),
-		EmbeddedTask: task, // Store the actual task object for later execution
-	}
-
-	// Get retry settings from task
-	if taskWithRetry, ok := task.(interface {
-		GetMaxRetries() int
-		GetRetryAfterHours() float64
-	}); ok {
-		retryTask.MaxRetries = taskWithRetry.GetMaxRetries()
-		retryTask.RetryAfterHours = taskWithRetry.GetRetryAfterHours()
-	} else {
-		// Default values if task doesn't provide them
-		retryTask.MaxRetries = 5
-		retryTask.RetryAfterHours = 1.0
-	}
-
-	retryTask.RetryAfterTime = time.Now().Add(time.Duration(retryTask.RetryAfterHours) * time.Hour)
-
-	// Get task type for registry lookup
-	if taskWithType, ok := task.(interface{ GetTaskType() string }); ok {
-		retryTask.TaskType = taskWithType.GetTaskType()
-		fmt.Println("Setting task type to:", retryTask.TaskType)
-	} else {
-		fmt.Println("WARNING: Task doesn't implement GetTaskType() - using any-task as fallback")
-		retryTask.TaskType = "any-task"
-	}
-
-	// Store minimal task data for diagnostic/debugging purposes
-	if data, err := json.Marshal(map[string]string{
-		"type": retryTask.TaskType,
-		"id":   retryTask.TaskID,
-	}); err == nil {
-		retryTask.TaskData = string(data)
-	}
-
-	// Store the task using the file store
-	if q.fileStore != nil {
-		err := q.fileStore.CreateTask(&retryTask)
-		if err != nil {
-			return fmt.Errorf("failed to store task: %w", err)
-		}
-		fmt.Println("Enqueued task:", retryTask)
-		return nil
-	} else {
-		// Fallback to the old Save method for backward compatibility
-		err := retryTask.Save()
-		if err != nil {
-			return fmt.Errorf("failed to save task: %w", err)
-		}
-		fmt.Println("Enqueued task (legacy method):", retryTask)
-		return nil
-	}
+	// For any non-SnerdTask, return an error as we no longer support legacy task types
+	return fmt.Errorf("legacy task types are no longer supported; use SnerdTask instead")
 }
 
 // EnqueueSnerdTask adds a parameter-based SnerdTask to the queue for execution
@@ -292,34 +212,26 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 }
 
 func (q *AnyQueue) processTask(task Task) {
-	err := task.Execute()
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	delete(q.activeTasks, task.GetTaskID()) // Remove from memory
-	if err != nil {
-		fmt.Println("Task failed but has no retries:", task.GetTaskID())
-	} else {
-		atomic.AddInt64(&q.totalDequeued, 1)
+	// Just execute the task directly
+	if err := task.Execute(); err != nil {
+		fmt.Printf("error executing task: %v\n", err)
 	}
 }
 
 // ProcessDueTasks processes all tasks that are due for execution (retry time has passed).
 func (q *AnyQueue) ProcessDueTasks() {
+	// Step 1: Load all tasks from the FileStore
 	if q.fileStore == nil {
-		fmt.Println("Error: File store not initialized")
+		fmt.Println("No file store available for processing tasks")
 		return
 	}
 
 	fmt.Println("Processing due tasks...")
-
-	// Step 1: Read all tasks from storage
-	tasks, err := q.fileStore.ReadTasks()
+	tasks, err := q.fileStore.ReadDueTasks()
 	if err != nil {
 		fmt.Printf("Error reading tasks: %v\n", err)
 		return
 	}
-
-	// Filter tasks that are due for execution (retry time has passed)
 	var dueTasks []*RetryableTask
 	for _, t := range tasks {
 		if t.RetryAfterTime.Before(time.Now()) {
@@ -331,53 +243,47 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 	// Step 2: Process each due task
 	for _, t := range dueTasks {
-		// Handle both legacy RetryableTask and new SnerdTask types
-		if snerdTask, ok := t.EmbeddedTask.(*SnerdTask); ok {
-			// Process SnerdTask using the new approach
-			fmt.Printf("Executing SnerdTask %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
+		// Extract the SnerdTask from the RetryableTask wrapper
+		snerdTask, ok := t.EmbeddedTask.(*SnerdTask)
+		if !ok {
+			// Skip tasks that aren't SnerdTask type
+			fmt.Printf("Skipping non-SnerdTask: %s\n", t.TaskID)
+			continue
+		}
 
-			// Execute the task using the registered handler
-			err := snerdTask.Execute()
-			if err != nil {
-				fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
+		// Process SnerdTask
+		fmt.Printf("Executing task %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
 
-				// Update retry configuration if we haven't exceeded max retries
-				if snerdTask.RetryCount < snerdTask.MaxRetries {
-					// Update retry count
-					snerdTask.RetryCount++
-					snerdTask.LastErrorObj = err
+		// Execute the task using the registered handler
+		err := snerdTask.Execute()
+		if err != nil {
+			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
-					// Update the task directly using the FileStore method
-					if q.fileStore != nil {
-						if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err); updateErr != nil {
-							fmt.Printf("Error updating task retry config: %v\n", updateErr)
-						} else {
-							fmt.Printf("Successfully updated task %s for retry\n", snerdTask.GetTaskID())
-						}
+			// Update retry configuration if we haven't exceeded max retries
+			if snerdTask.RetryCount < snerdTask.MaxRetries {
+				// Update retry count
+				snerdTask.RetryCount++
+				snerdTask.LastErrorObj = err
+
+				// Update the task directly using the FileStore method
+				if q.fileStore != nil {
+					if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err); updateErr != nil {
+						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
-						// No filestore available, log an error
-						fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
+						fmt.Printf("Successfully updated task %s for retry\n", snerdTask.GetTaskID())
 					}
 				} else {
-					// Task reached max retries, handle it
-					fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
-
-					// Execute OnMaxRetryReached handler if implemented
-					if callbackErr := snerdTask.OnMaxRetryReached(nil); callbackErr != nil {
-						fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
-					}
-
-					// Delete the task
-					if deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID()); deleteErr != nil {
-						fmt.Printf("Error deleting task: %v\n", deleteErr)
-					} else {
-						fmt.Printf("Successfully deleted task %s\n", snerdTask.GetTaskID())
-						atomic.AddInt64(&q.totalDequeued, 1)
-					}
+					// No filestore available, log an error
+					fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
 				}
 			} else {
-				// Task executed successfully, remove it
-				fmt.Printf("Task %s executed successfully\n", snerdTask.GetTaskID())
+				// Task reached max retries, handle it
+				fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
+
+				// Execute OnMaxRetryReached handler if implemented
+				if callbackErr := snerdTask.OnMaxRetryReached(nil); callbackErr != nil {
+					fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
+				}
 
 				// Delete the task
 				if deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID()); deleteErr != nil {
@@ -388,58 +294,19 @@ func (q *AnyQueue) ProcessDueTasks() {
 				}
 			}
 		} else {
-			// Legacy RetryableTask handling (for backward compatibility)
-			fmt.Printf("Executing legacy task %s (type=%s)\n", t.GetTaskID(), t.TaskType)
+			// Task executed successfully, remove it
+			fmt.Printf("Task %s executed successfully\n", snerdTask.GetTaskID())
 
-			// Execute the task
-			err := t.Execute()
-			if err != nil {
-				fmt.Printf("Error executing task %s: %v\n", t.GetTaskID(), err)
-
-				// Handle retry logic for legacy tasks
-				if t.RetryCount < t.MaxRetries {
-					// Increment retry count and reschedule
-					t.RetryCount++
-					t.RetryAfterTime = time.Now().Add(time.Duration(t.RetryAfterHours * float64(time.Hour)))
-
-					// Save the updated task
-					if updateErr := q.fileStore.CreateTask(t); updateErr != nil {
-						fmt.Printf("Error updating legacy task: %v\n", updateErr)
-					}
-				} else {
-					// Legacy task reached max retries
-					fmt.Printf("Legacy task %s reached max retries\n", t.GetTaskID())
-
-					// Handle max retry callback if implemented
-					if maxRetryHandler, ok := t.EmbeddedTask.(TaskWithMaxRetryCallback); ok && maxRetryHandler != nil {
-						if callbackErr := maxRetryHandler.OnMaxRetryReached(nil); callbackErr != nil {
-							fmt.Printf("Error executing legacy OnMaxRetryReached: %v\n", callbackErr)
-						}
-					}
-
-					// Delete the task
-					if deleteErr := q.fileStore.DeleteTask(t.GetTaskID()); deleteErr != nil {
-						fmt.Printf("Error deleting legacy task: %v\n", deleteErr)
-					}
-				}
+			// Delete the task
+			if deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID()); deleteErr != nil {
+				fmt.Printf("Error deleting task: %v\n", deleteErr)
 			} else {
-				// Legacy task executed successfully
-				fmt.Printf("Legacy task %s executed successfully\n", t.GetTaskID())
-
-				// Delete the task
-				if deleteErr := q.fileStore.DeleteTask(t.GetTaskID()); deleteErr != nil {
-					fmt.Printf("Error deleting legacy task: %v\n", deleteErr)
-				} else {
-					atomic.AddInt64(&q.totalDequeued, 1)
-				}
+				fmt.Printf("Successfully deleted task %s\n", snerdTask.GetTaskID())
+				atomic.AddInt64(&q.totalDequeued, 1)
 			}
 		}
 	}
 }
-
-// TaskFactory creates a Task from its stored data.
-// The factory function is responsible for reconstructing a Task instance, including unmarshaling any stored data.
-type TaskFactory func(id string, data string) (Task, error)
 
 // Name returns the name of the queue.
 func (q *AnyQueue) Name() string {
@@ -450,16 +317,25 @@ func (q *AnyQueue) Name() string {
 
 // Size returns the number of active tasks currently in the queue.
 func (q *AnyQueue) Size() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.activeTasks)
+	// With the new implementation, we need to count tasks from the FileStore
+	if q.fileStore == nil {
+		return 0
+	}
+
+	tasks, err := q.fileStore.ReadDueTasks()
+	if err != nil {
+		fmt.Printf("Error reading tasks: %v\n", err)
+		return 0
+	}
+
+	return len(tasks)
 }
 
 // RemainingCapacity returns the number of additional tasks that can be enqueued before reaching maxSize.
 func (q *AnyQueue) RemainingCapacity() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.maxSize - len(q.activeTasks)
+	return q.maxSize - q.Size()
 }
 
 // TotalProcessed returns the total number of tasks that have been processed and dequeued.
