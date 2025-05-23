@@ -173,13 +173,10 @@ func (q *AnyQueue) ProcessDueTasks() {
 			EmbeddedTask:    t.EmbeddedTask,
 		}
 
-		// Simple, direct task execution
-		var task Task = taskWrapper
-
-		fmt.Printf("Executing task %s (type=%s)\n", t.TaskID, t.TaskType)
+		fmt.Printf("Executing task %s (type=%s) with embedded task %v\n", t.TaskID, t.TaskType, t.EmbeddedTask)
 
 		// Execute the task
-		err := task.Execute()
+		err := taskWrapper.Execute()
 		if err != nil {
 			fmt.Printf("Error executing task %s: %v\n", t.TaskID, err)
 			// Increment retry count and reschedule if we haven't exceeded max retries
