@@ -53,7 +53,7 @@ type RetryableTask struct {
 	UpdatedAt    time.Time  `json:"-"`
 	DeletedAt    *time.Time `json:"-,omitempty"`
 	// Embedded task object - this is the actual task that will be executed
-	EmbeddedTask Task `json:"-"`
+	EmbeddedTask Task `json:"embeddedTask"`
 }
 
 func (t *RetryableTask) Execute() error {
@@ -61,7 +61,7 @@ func (t *RetryableTask) Execute() error {
 	if t.EmbeddedTask != nil {
 		return t.EmbeddedTask.Execute()
 	}
-	
+
 	// For generic RetryableTask with no embedded task, this is a no-op
 	fmt.Println("Generic RetryableTask executed - no specific implementation")
 	return nil

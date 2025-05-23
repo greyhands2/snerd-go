@@ -86,7 +86,7 @@ func (fs *FileStore) RebuildMetaData() error {
 
 // CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
-	fmt.Println("Creating task:", task)
+	fmt.Println("Creating task:", task.EmbeddedTask)
 	// get the mutex lock and unlock out of the way
 	fs.mu.Lock()
 	defer fs.mu.Unlock()

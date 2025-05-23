@@ -199,18 +199,8 @@ func (q *AnyQueue) ProcessDueTasks() {
 				if maxRetryHandler, ok := task.(TaskWithMaxRetryCallback); ok {
 					fmt.Printf("Task %s implements OnMaxRetryReached, executing callback\n", t.TaskID)
 
-					// Create a context provider function that checks for stored context data
-					contextProvider := func() interface{} {
-						// Check if the task stores its context data
-						if contextHolder, ok := task.(interface{ GetRetryContext() interface{} }); ok {
-							return contextHolder.GetRetryContext()
-						}
-						// Fallback to returning nil
-						return nil
-					}
-
-					// Execute the callback with our context provider
-					if callbackErr := maxRetryHandler.OnMaxRetryReached(contextProvider); callbackErr != nil {
+					// Execute the callback
+					if callbackErr := maxRetryHandler.OnMaxRetryReached(nil); callbackErr != nil {
 						fmt.Printf("Error executing OnMaxRetryReached for task %s: %v\n", t.TaskID, callbackErr)
 					} else {
 						fmt.Printf("Successfully executed OnMaxRetryReached for task %s\n", t.TaskID)
