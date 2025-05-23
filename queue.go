@@ -239,18 +239,28 @@ func (q *AnyQueue) ProcessDueTasks() {
 	}
 	
 	// No need to filter here, ReadDueTasks already returns only due tasks
+	if len(tasks) == 0 {
+		fmt.Println("No due tasks found")
+		return
+	}
+	
 	fmt.Printf("Found %d due tasks\n", len(tasks))
 
 	// Step 2: Process each due task
 	for _, t := range tasks {
-		// Create a proper SnerdTask from the RetryableTask
+		// Convert RetryableTask to SnerdTask for execution
 		snerdTask := FromRetryableTask(t)
 
-		// Log task execution with parameters for debugging
-		fmt.Printf("Executing task %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
-		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
+		// Skip tasks with missing type or parameters
+		if snerdTask.TaskType == "" {
+			fmt.Printf("Skipping task %s: missing task type\n", snerdTask.GetTaskID())
+			continue
+		}
 
-		// Get the task handler
+		// Log task execution for debugging
+		fmt.Printf("Executing task %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
+
+		// Get the task handler from the registry
 		handlersMutex.RLock()
 		handler, exists := taskHandlers[snerdTask.TaskType]
 		handlersMutex.RUnlock()
@@ -261,61 +271,96 @@ func (q *AnyQueue) ProcessDueTasks() {
 		}
 		
 		// Execute the handler with the task parameters
+		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
 		err := handler(snerdTask.Parameters)
 		if err != nil {
 			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
-			// Update retry configuration if we haven't exceeded max retries
+			// Handle retry logic if the task has failed
 			if snerdTask.RetryCount < snerdTask.MaxRetries {
-				// Update retry count
+				// Calculate next retry time
 				snerdTask.RetryCount++
-				snerdTask.LastErrorObj = err
-
-				// Update the task directly using the FileStore method
+				
+				// Update task in file store with retry information
 				if q.fileStore != nil {
-					if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err); updateErr != nil {
+					// Convert to RetryableTask using the method on SnerdTask
+					retryableTask := snerdTask.ToRetryableTask()
+					
+					// Ensure we calculate retry time properly
+					retryHours := snerdTask.RetryAfterHours
+					if retryHours <= 0 {
+						// Default to 30 minutes if not specified
+						retryHours = 0.5
+					}
+					retryDuration := time.Duration(retryHours * float64(time.Hour))
+					retryableTask.RetryAfterTime = time.Now().Add(retryDuration)
+					
+					// Log the retry information
+					fmt.Printf("Scheduling task %s for retry %d/%d after %s (at %s)\n", 
+						snerdTask.GetTaskID(), 
+						snerdTask.RetryCount, 
+						snerdTask.MaxRetries,
+						retryDuration,
+						retryableTask.RetryAfterTime.Format(time.RFC3339))
+					
+					// Update the task for retry
+					updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err)
+					if updateErr != nil {
 						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
 						fmt.Printf("Successfully updated task %s for retry\n", snerdTask.GetTaskID())
 					}
 				} else {
-					// No filestore available, log an error
 					fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
 				}
 			} else {
-				// Task reached max retries, handle it
+				// Max retries reached - execute the task's OnMaxRetryReached method if implemented
 				fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
-
-				// Execute OnMaxRetryReached handler if implemented
-				if callbackErr := snerdTask.OnMaxRetryReached(nil); callbackErr != nil {
+				// Create a context provider function that returns the error
+				contextProvider := func() interface{} {
+					return err
+				}
+				// Pass the context provider to OnMaxRetryReached
+				if callbackErr := snerdTask.OnMaxRetryReached(contextProvider); callbackErr != nil {
 					fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
 				}
-
-				// Delete the task
-				if deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID()); deleteErr != nil {
-					fmt.Printf("Error deleting task: %v\n", deleteErr)
-				} else {
-					fmt.Printf("Successfully deleted task %s\n", snerdTask.GetTaskID())
-					atomic.AddInt64(&q.totalDequeued, 1)
+				
+				// Delete the task after it has reached max retries
+				if q.fileStore != nil {
+					deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
+					if deleteErr != nil {
+						fmt.Printf("Error deleting task: %v\n", deleteErr)
+					} else {
+						fmt.Printf("Successfully deleted task %s after max retries\n", snerdTask.GetTaskID())
+					}
 				}
 			}
 		} else {
-			// Task executed successfully, remove it
+			// Task executed successfully
 			fmt.Printf("Task %s executed successfully\n", snerdTask.GetTaskID())
-
-			// Delete the task
-			if deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID()); deleteErr != nil {
-				fmt.Printf("Error deleting task: %v\n", deleteErr)
-			} else {
-				fmt.Printf("Successfully deleted task %s\n", snerdTask.GetTaskID())
-				atomic.AddInt64(&q.totalDequeued, 1)
+			
+			// Delete the task after successful execution
+			if q.fileStore != nil {
+				// Ensure we soft-delete by using the proper method
+				deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
+				if deleteErr != nil {
+					fmt.Printf("Error deleting task %s: %v\n", snerdTask.GetTaskID(), deleteErr)
+				} else {
+					fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.GetTaskID())
+					
+					// Record task completion statistics
+					duration := time.Since(snerdTask.CreatedAt)
+					fmt.Printf("Task %s completed in %v (type=%s)\n", 
+						snerdTask.GetTaskID(), 
+						duration.Round(time.Millisecond), 
+						snerdTask.TaskType)
+				}
 			}
 		}
+		atomic.AddInt64(&q.totalDequeued, 1)
 	}
 }
-
-// Name returns the name of the queue.
 func (q *AnyQueue) Name() string {
 	q.mu.Lock()
 	defer q.mu.Unlock()

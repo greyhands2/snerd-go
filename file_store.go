@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -171,25 +172,34 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	file, err := os.Open(fs.filePath)
+	// Make sure the parent directory exists
+	dirPath := filepath.Dir(fs.filePath)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
+	}
+
+	// Try to open the file
+	f, err := os.Open(fs.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return empty slice if file doesn't exist yet
+			// No tasks file yet, return empty slice
+			fmt.Printf("Task file does not exist yet at %s, returning empty list\n", fs.filePath)
 			return []*RetryableTask{}, nil
 		}
-		return nil, fmt.Errorf("open file: %w", err)
+		return nil, fmt.Errorf("failed to open task file %s: %w", fs.filePath, err)
 	}
-	defer func(file *os.File) {
-		err := file.Close()
+
+	defer func(f *os.File) {
+		err := f.Close()
 		if err != nil {
-			fmt.Printf("Error closing file: %s\n", err)
+			fmt.Printf("Error closing file %s: %v\n", fs.filePath, err)
 			return
 		}
-	}(file)
+	}(f)
 
 	// Build map of latest tasks by ID
 	taskMap := make(map[string]*RetryableTask)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var t RetryableTask
@@ -229,22 +239,22 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read tasks: %w", err)
 	}
-	
+
 	// Filter tasks that are due for execution (their retry time has passed)
 	now := time.Now()
 	dueTasks := make([]*RetryableTask, 0, len(tasks))
-	
+
 	for _, task := range tasks {
 		if task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now) {
 			dueTasks = append(dueTasks, task)
 		}
 	}
-	
+
 	if len(dueTasks) > 0 {
-		fmt.Printf("Found %d tasks due for execution out of %d total tasks\n", 
+		fmt.Printf("Found %d tasks due for execution out of %d total tasks\n",
 			len(dueTasks), len(tasks))
 	}
-	
+
 	return dueTasks, nil
 }
 
@@ -385,7 +395,18 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	// First find the existing task to preserve its data
 	existingTask, err := fs.getLatestTask(taskID)
 	if err != nil {
+		// If the task doesn't exist, that's not an error - it might have been deleted already
+		if strings.Contains(err.Error(), "not found") {
+			fmt.Printf("Task %s already deleted or not found\n", taskID)
+			return nil
+		}
 		return fmt.Errorf("cannot delete task, error retrieving it: %w", err)
+	}
+
+	// Check if already deleted
+	if existingTask.DeletedAt != nil {
+		fmt.Printf("Task %s already marked as deleted\n", taskID)
+		return nil
 	}
 
 	// Mark the task as deleted while preserving all other data
@@ -434,36 +455,60 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	return nil
 }
 
-// our implementation of Compaction. Compaction is the process of cleaning up the task log file by removing obsolete
-// entries—such as soft-deleted or outdated task versions—to reduce file size and improve read efficiency.
+// Compact removes all deleted tasks from the log file to reduce its size.
+// This method was previously called CompactLog but is now renamed to Compact
+// for consistency with other methods.
 func (fs *FileStore) Compact() error {
-	fmt.Println("Compacting file")
+	// Use atomic flag to ensure only one compaction runs at a time
 	if !compacting.CompareAndSwap(false, true) {
-		return nil // already compacting
+		fmt.Println("Task log compaction already in progress, skipping")
+		return nil // Already compacting
 	}
 	defer compacting.Store(false)
 
+	// Log compaction start
+	start := time.Now()
+	fmt.Printf("Starting task log compaction at %s\n", start.Format(time.RFC3339))
+
+	// Lock the mutex for the entire compaction process
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	fmt.Println("Opening file:", fs.filePath)
-	f, err := os.Open(fs.filePath)
+	// Create a temporary file for the compacted log
+	tempFilePath := fs.filePath + ".tmp"
+	tempFile, err := os.Create(tempFilePath)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer func(tempFile *os.File) {
+		err := tempFile.Close()
+		if err != nil {
+			fmt.Printf("Error closing temp file during compaction: %v\n", err)
+			return
+		}
+	}(tempFile)
+	
+	// Stats for logging
+	var deletedTaskCount int
+
+	fmt.Println("Building latest state of each task")
+	// Build the latest state of each task
+	taskMap := make(map[string]*RetryableTask)
+	deleted := make(map[string]bool)
+
+	inputFile, err := os.Open(fs.filePath)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-	fmt.Println("Opened file:", f)
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
 			fmt.Printf("Error closing file: %s\n", err)
 			return
 		}
-	}(f)
+	}(inputFile)
 
-	fmt.Println("Building latest state of each task")
-	// Build the latest state of each task
-	taskMap := make(map[string]*RetryableTask)
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(inputFile)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var t RetryableTask
@@ -472,25 +517,25 @@ func (fs *FileStore) Compact() error {
 			continue
 		}
 
+		// Track deleted tasks
 		if t.DeletedAt != nil {
-			delete(taskMap, t.TaskID)
-		} else {
-			taskMap[t.TaskID] = &t
+			deleted[t.TaskID] = true
+			deletedTaskCount++
+			continue
 		}
 
+		// Keep only the latest version of each task
+		if existing, ok := taskMap[t.TaskID]; !ok || t.UpdatedAt.After(existing.UpdatedAt) {
+			taskMap[t.TaskID] = &t
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan file: %w", err)
 	}
 	fmt.Println("Scanned file")
-	//write to temp file
-	tempPath := fs.filePath + ".tmp"
-	tempFile, err := os.Create(tempPath)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	fmt.Println("Created temp file:", tempFile)
+	// Already created temp file at the beginning, now we'll use it
+	fmt.Println("Writing to temp file:", tempFile.Name())
 	encoder := json.NewEncoder(tempFile)
 	for _, task := range taskMap {
 		if err := encoder.Encode(task); err != nil {
@@ -518,7 +563,7 @@ func (fs *FileStore) Compact() error {
 	fmt.Println("Closed tempfile")
 	// finally atomically replace old file
 	fmt.Println("Renaming tempfile to file")
-	if err := os.Rename(tempPath, fs.filePath); err != nil {
+	if err := os.Rename(tempFilePath, fs.filePath); err != nil {
 		return fmt.Errorf("rename tempfile: %w", err)
 	}
 	fmt.Println("Renamed tempfile to file")

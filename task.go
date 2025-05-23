@@ -138,6 +138,10 @@ func (t *SnerdTask) GetRetryAfterHours() float64 {
 
 // Execute runs the task by invoking the registered handler
 func (t *SnerdTask) Execute() error {
+	// Log execution for debugging
+	fmt.Printf("Executing SnerdTask: ID=%s, Type=%s\n", t.TaskID, t.TaskType)
+	
+	// Get the handler for this task type
 	handlersMutex.RLock()
 	handler, exists := taskHandlers[t.TaskType]
 	handlersMutex.RUnlock()
@@ -146,7 +150,14 @@ func (t *SnerdTask) Execute() error {
 		return fmt.Errorf("no handler registered for task type: %s", t.TaskType)
 	}
 	
-	// Execute the handler with the task parameters
+	// Log parameter info for debugging
+	if t.Parameters == "" {
+		fmt.Printf("Warning: Empty parameters for task %s\n", t.TaskID)
+	} else if !strings.HasPrefix(t.Parameters, "{") {
+		fmt.Printf("Warning: Non-JSON parameters for task %s: %s\n", t.TaskID, t.Parameters)
+	}
+	
+	// Execute the task handler with the parameters
 	return handler(t.Parameters)
 }
 
@@ -216,39 +227,60 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		DeletedAt:       rt.DeletedAt,
 	}
 	
-	// Extract the parameters from the task data
-	// First, try to use the TaskData directly if it looks like parameters
-	if rt.TaskType != "" && !strings.Contains(rt.TaskData, "parameters") {
+	// Improved parameter extraction with better handling of nested JSON structures
+	// Direct case: TaskData is already in the format we need
+	if rt.TaskType != "" && strings.HasPrefix(rt.TaskData, "{") && !strings.Contains(rt.TaskData, "parameters") {
 		// This is likely direct parameter data
 		task.Parameters = rt.TaskData
 		return task
 	}
 
-	// Otherwise, try to extract the parameters from the nested structure
+	// Complex case: need to extract parameters from nested structure
 	var taskData map[string]interface{}
 	if err := json.Unmarshal([]byte(rt.TaskData), &taskData); err == nil {
 		// Look for the parameters field in the task data
 		if params, ok := taskData["parameters"]; ok {
-			// Convert to string if it's not already
-			if paramsStr, ok := params.(string); ok {
-				// This is the common case - parameters stored as a JSON string
-				task.Parameters = paramsStr
-				fmt.Printf("Extracted parameters from JSON string: %s\n", paramsStr)
-			} else {
-				// Try to marshal it to JSON
+			// Convert parameters to usable format
+			switch p := params.(type) {
+			case string:
+				// Already a string, use directly
+				task.Parameters = p
+				
+			case map[string]interface{}:
+				// Parameters are a nested map, marshal to JSON
+				if paramsJSON, err := json.Marshal(p); err == nil {
+					task.Parameters = string(paramsJSON)
+				}
+				
+			default:
+				// Try to marshal unknown type to JSON
 				if paramsJSON, err := json.Marshal(params); err == nil {
 					task.Parameters = string(paramsJSON)
-					fmt.Printf("Marshalled parameters to JSON: %s\n", task.Parameters)
 				}
 			}
 		} else {
-			// No parameters field, maybe the TaskData itself is the parameters?
-			fmt.Printf("No parameters field found, using TaskData directly\n")
+			// Special case: if no parameters field but we have URL or FilePath, create simple parameters
+			if url, ok := taskData["url"].(string); ok && rt.TaskType == "http-fetch" {
+				// Reconstruct http-fetch parameters
+				params := map[string]string{"url": url}
+				if paramsJSON, err := json.Marshal(params); err == nil {
+					task.Parameters = string(paramsJSON)
+					return task
+				}
+			} else if filePath, ok := taskData["filePath"].(string); ok && rt.TaskType == "file-read" {
+				// Reconstruct file-read parameters
+				params := map[string]string{"filePath": filePath}
+				if paramsJSON, err := json.Marshal(params); err == nil {
+					task.Parameters = string(paramsJSON)
+					return task
+				}
+			}
+			
+			// As a last resort, use the entire TaskData as parameters
 			task.Parameters = rt.TaskData
 		}
 	} else {
 		// If we can't parse the TaskData as JSON, use it directly as parameters
-		fmt.Printf("Could not parse TaskData as JSON, using directly: %s\n", rt.TaskData)
 		task.Parameters = rt.TaskData
 	}
 	
