@@ -142,9 +142,9 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	if snerdTask, ok := task.(*SnerdTask); ok {
 		return q.EnqueueSnerdTask(snerdTask)
 	}
-	
+
 	atomic.AddInt64(&q.totalEnqueued, 1)
-	
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -186,7 +186,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	}
 
 	retryTask.RetryAfterTime = time.Now().Add(time.Duration(retryTask.RetryAfterHours) * time.Hour)
-	
+
 	// Get task type for registry lookup
 	if taskWithType, ok := task.(interface{ GetTaskType() string }); ok {
 		retryTask.TaskType = taskWithType.GetTaskType()
@@ -250,7 +250,7 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 					// Update retry count and error
 					task.RetryCount++
 					task.LastErrorObj = err
-					
+
 					// Update task using FileStore's method
 					if q.fileStore != nil {
 						if updateErr := q.fileStore.UpdateTaskRetryConfig(task.GetTaskID(), err); updateErr != nil {
@@ -346,7 +346,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 					// Update retry count
 					snerdTask.RetryCount++
 					snerdTask.LastErrorObj = err
-					
+
 					// Update the task directly using the FileStore method
 					if q.fileStore != nil {
 						if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err); updateErr != nil {

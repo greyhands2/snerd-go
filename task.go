@@ -95,6 +95,8 @@ func NewSnerdTask(
 		return nil, fmt.Errorf("failed to serialize parameters: %w", err)
 	}
 	
+	// For new tasks, set RetryAfterTime to now (immediately due)
+	// Only tasks being retried will have RetryAfterTime set to the future
 	return &SnerdTask{
 		TaskID:          taskID,
 		TaskType:        taskType,
@@ -102,7 +104,7 @@ func NewSnerdTask(
 		RetryCount:      0,
 		MaxRetries:      maxRetries,
 		RetryAfterHours: retryAfterHours,
-		RetryAfterTime:  time.Now().Add(time.Duration(retryAfterHours * float64(time.Hour))),
+		RetryAfterTime:  time.Now(), // Make new tasks immediately due
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}, nil
