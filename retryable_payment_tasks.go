@@ -53,13 +53,29 @@ type RetryableTask struct {
 	UpdatedAt    time.Time  `json:"-"`
 	DeletedAt    *time.Time `json:"-,omitempty"`
 	// Embedded task object - this is the actual task that will be executed
-	EmbeddedTask Task `json:"embeddedTask"`
+	EmbeddedTask Task `json:"-"`
 }
 
 func (t *RetryableTask) Execute() error {
 	// If we have an embedded task, delegate execution to it
 	if t.EmbeddedTask != nil {
 		return t.EmbeddedTask.Execute()
+	}
+
+	// No embedded task, try to reconstruct it from task type and data
+	if t.TaskType != "" && t.TaskData != "" {
+		// Try to use registered task factories to reconstruct the task
+		taskCopy := *t // Create a copy to pass to GetRegisteredTaskFactory
+		factory, found := GetRegisteredTaskFactory(taskCopy)
+		if found {
+			var err error
+			concreteTask, err := factory(t.TaskID, t.TaskData)
+			if err == nil && concreteTask != nil {
+				// Successfully reconstructed the task, store it and execute
+				t.EmbeddedTask = concreteTask
+				return t.EmbeddedTask.Execute()
+			}
+		}
 	}
 
 	// For generic RetryableTask with no embedded task, this is a no-op
@@ -73,7 +89,42 @@ func (t *RetryableTask) GetMaxRetries() int           { return t.MaxRetries }
 func (t *RetryableTask) GetRetryAfterTime() time.Time { return t.RetryAfterTime }
 
 func (t *RetryableTask) GetRetryAfterHours() float64 { return t.RetryAfterHours }
+func (t *RetryableTask) UnmarshalJSON(data []byte) error {
+	// Use a temporary struct without the EmbeddedTask field to avoid infinite recursion
+	type Alias struct {
+		TaskID          string          `json:"taskId"`
+		RetryCount      int             `json:"retryCount"`
+		MaxRetries      int             `json:"maxRetries"`
+		RetryAfterHours float64         `json:"retryAfterHours"`
+		RetryAfterTime  time.Time       `json:"retryAfterTime"`
+		TaskData        string          `json:"taskData"`
+		TaskType        string          `json:"taskType"`
+		LastErrorObj    error           `json:"LastErrorObj"`
+		LastJobError    *JobErrorReturn `json:"LastJobError"`
+	}
 
+	// Unmarshal into our temporary struct
+	var alias Alias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	// Copy all fields except EmbeddedTask
+	t.TaskID = alias.TaskID
+	t.RetryCount = alias.RetryCount
+	t.MaxRetries = alias.MaxRetries
+	t.RetryAfterHours = alias.RetryAfterHours
+	t.RetryAfterTime = alias.RetryAfterTime
+	t.TaskData = alias.TaskData
+	t.TaskType = alias.TaskType
+	t.LastErrorObj = alias.LastErrorObj
+	t.LastJobError = alias.LastJobError
+
+	// We'll reconstruct the EmbeddedTask when Execute is called, not here
+	t.EmbeddedTask = nil
+
+	return nil
+}
 func (t *RetryableTask) GenerateRandomString(length int) (string, error) {
 	randomBytes := make([]byte, (length*3+3)/4) // Adjust the byte slice length to ensure enough bytes for base64 encoding
 	_, err := rand.Read(randomBytes)
