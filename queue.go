@@ -247,14 +247,20 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 			if err := task.Execute(); err != nil {
 				// Update retry configuration if we haven't exceeded max retries
 				if task.RetryCount < task.MaxRetries {
-					task.UpdateRetryConfig(err)
-
-					// Save the updated task
-					retryableTask = task.ToRetryableTask()
+					// Update retry count and error
+					task.RetryCount++
+					task.LastErrorObj = err
+					
+					// Update task using FileStore's method
 					if q.fileStore != nil {
-						if updateErr := q.fileStore.CreateTask(retryableTask); updateErr != nil {
-							fmt.Printf("Error updating task: %v\n", updateErr)
+						if updateErr := q.fileStore.UpdateTaskRetryConfig(task.GetTaskID(), err); updateErr != nil {
+							fmt.Printf("Error updating task retry config: %v\n", updateErr)
+						} else {
+							fmt.Printf("Successfully updated task %s for retry\n", task.GetTaskID())
 						}
+					} else {
+						// No filestore available, log an error
+						fmt.Printf("Warning: Cannot update task %s - no file store available\n", task.GetTaskID())
 					}
 				} else {
 					// Task reached max retries
@@ -337,14 +343,20 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 				// Update retry configuration if we haven't exceeded max retries
 				if snerdTask.RetryCount < snerdTask.MaxRetries {
-					// Update retry configuration
-					snerdTask.UpdateRetryConfig(err)
-
-					// Save the updated task
-					if updateErr := q.fileStore.CreateTask(t); updateErr != nil {
-						fmt.Printf("Error updating task in storage: %v\n", updateErr)
+					// Update retry count
+					snerdTask.RetryCount++
+					snerdTask.LastErrorObj = err
+					
+					// Update the task directly using the FileStore method
+					if q.fileStore != nil {
+						if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err); updateErr != nil {
+							fmt.Printf("Error updating task retry config: %v\n", updateErr)
+						} else {
+							fmt.Printf("Successfully updated task %s for retry\n", snerdTask.GetTaskID())
+						}
 					} else {
-						fmt.Printf("Successfully updated task %s for retry\n", snerdTask.GetTaskID())
+						// No filestore available, log an error
+						fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
 					}
 				} else {
 					// Task reached max retries, handle it

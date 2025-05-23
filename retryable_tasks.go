@@ -332,13 +332,22 @@ func GetRegisteredTaskFactory(retryableTask RetryableTask) (func(id string, data
 	}, true
 }
 
-// UpdateTask updates a task in the database
+// UpdateTaskRetryConfig updates a task's retry configuration in the database
 func (t *RetryableTask) UpdateTaskRetryConfig(taskId string) error {
+	// This is the legacy method without error tracking
+	return t.UpdateTaskRetryConfigWithError(taskId, nil)
+}
+
+// UpdateTaskRetryConfigWithError updates a task's retry configuration and stores error information
+func (t *RetryableTask) UpdateTaskRetryConfigWithError(taskId string, errorObj error) error {
+	// Create a file store using the hidden .snerdata folder
 	fileStore, err := NewFileStore(filePath)
 	if err != nil {
 		return err
 	}
-	if err := fileStore.UpdateTaskRetryConfig(taskId); err != nil {
+	
+	// Call the updated method with error information
+	if err := fileStore.UpdateTaskRetryConfig(taskId, errorObj); err != nil {
 		return err
 	}
 	return nil

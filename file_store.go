@@ -217,7 +217,7 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 	return tasks, nil
 }
 
-func (fs *FileStore) UpdateTaskRetryConfig(taskID string) error {
+func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -266,6 +266,31 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string) error {
 	latest.RetryCount++
 	latest.RetryAfterTime = time.Now().Add(time.Duration(latest.RetryAfterHours) * time.
 		Hour)
+
+	// Store error information if provided
+	if errorObj != nil {
+		// Create a JobErrorReturn for structured error data
+		latest.LastJobError = &JobErrorReturn{
+			ErrorObj:    errorObj,
+			RetryWorthy: true, // Assuming it's retry-worthy since we're updating retry config
+		}
+
+		// Store error message as a string in TaskData for easier debugging
+		if latest.TaskData != "" {
+			// Try to parse existing data to add error information
+			var data map[string]interface{}
+			if err := json.Unmarshal([]byte(latest.TaskData), &data); err == nil {
+				// Add error information
+				data["lastError"] = errorObj.Error()
+				data["lastErrorTime"] = time.Now().Format(time.RFC3339)
+
+				// Re-serialize
+				if updatedData, err := json.Marshal(data); err == nil {
+					latest.TaskData = string(updatedData)
+				}
+			}
+		}
+	}
 
 	return fs.CreateTask(latest)
 
