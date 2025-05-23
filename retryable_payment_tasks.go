@@ -49,11 +49,14 @@ func (t *RetryableTask) Execute() error {
 
 	// No embedded task, try to reconstruct it from TaskType and TaskData
 	if t.TaskType != "" && t.TaskData != "" {
+		fmt.Println("Reconstructing embedded task from TaskType and TaskData!!!!!!!")
 		factory, found := taskFactories[t.TaskType]
 		if found && factory != nil {
+			fmt.Println("Found factory for task type: " + t.TaskType)
 			// Use the factory to create a concrete task instance
 			concreteTask, err := factory(t.TaskID, t.TaskData)
 			if err == nil && concreteTask != nil {
+				fmt.Println("Successfully reconstructed embedded task of type: " + t.TaskType)
 				// Successfully reconstructed the task
 				t.EmbeddedTask = concreteTask
 				fmt.Printf("Task %s: reconstructed embedded task of type %s\n", t.TaskID, t.TaskType)

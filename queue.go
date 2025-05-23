@@ -45,7 +45,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 	}
 }
 
-// Enqueue adds a Task to the queue for processing.
+// Enqueue adds a Task to the queue for processing..
 // For in-memory tasks, it immediately starts execution in a goroutine.
 // For retryable tasks, it persists the task and manages retry logic.
 func (q *AnyQueue) Enqueue(task Task) error {
