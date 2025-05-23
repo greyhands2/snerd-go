@@ -214,9 +214,10 @@ func DeleteTask(taskId string) error {
 func GetRegisteredTaskFactory(retryableTask RetryableTask) (func(id string, data string) (Task, error), bool) {
 	factory, exists := taskFactories["any-task"]
 	if !exists {
+		fmt.Println("YES No factory found for task type: any-task")
 		return nil, false
 	}
-	fmt.Println("Found factory for task type: any-task")
+	fmt.Println("YES Found factory for task type: any-task")
 	// Create a new factory
 	return func(id string, data string) (Task, error) {
 		task, err := factory(id, data)
