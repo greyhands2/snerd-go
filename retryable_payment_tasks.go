@@ -45,18 +45,25 @@ type RetryableTask struct {
 	RetryAfterHours float64   `json:"retryAfterHours"`
 	RetryAfterTime  time.Time `json:"retryAfterTime"`
 	TaskData        string    `json:"taskData"` // JSON string to store task-specific data
-	TaskType        string    `json:"taskType"` // Type identifier for registry lookup
+	TaskType        string    `json:"taskType"` // For diagnostic purposes only
 	// Fields to store error information for OnMaxRetryReached
 	LastErrorObj error
 	LastJobError *JobErrorReturn
 	CreatedAt    time.Time  `json:"-"`
 	UpdatedAt    time.Time  `json:"-"`
 	DeletedAt    *time.Time `json:"-,omitempty"`
+	// Embedded task object - this is the actual task that will be executed
+	EmbeddedTask Task `json:"-"`
 }
 
 func (t *RetryableTask) Execute() error {
-	// Implement your task logic here. For generic RetryableTask, this could be a no-op or a log statement.
-	// For custom tasks, override this method.
+	// If we have an embedded task, delegate execution to it
+	if t.EmbeddedTask != nil {
+		return t.EmbeddedTask.Execute()
+	}
+	
+	// For generic RetryableTask with no embedded task, this is a no-op
+	fmt.Println("Generic RetryableTask executed - no specific implementation")
 	return nil
 }
 

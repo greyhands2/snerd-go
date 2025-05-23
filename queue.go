@@ -70,8 +70,9 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	fmt.Println("Enqueueing retryable task:", task.GetTaskID())
 	// For retryable tasks, store in DB with task-specific retry settings
 	retryTask := RetryableTask{
-		TaskID:     task.GetTaskID(),
-		RetryCount: task.GetRetryCount(),
+		TaskID:       task.GetTaskID(),
+		RetryCount:   task.GetRetryCount(),
+		EmbeddedTask: task, // Store the actual task object for later execution
 	}
 
 	// Get retry settings from task
@@ -92,6 +93,10 @@ func (q *AnyQueue) Enqueue(task Task) error {
 	// Get task type for registry lookup
 	if taskWithType, ok := task.(interface{ GetTaskType() string }); ok {
 		retryTask.TaskType = taskWithType.GetTaskType()
+		fmt.Println("Setting task type to:", retryTask.TaskType)
+	} else {
+		fmt.Println("WARNING: Task doesn't implement GetTaskType() - using any-task as fallback")
+		retryTask.TaskType = "any-task"
 	}
 
 	// If task implements TaskWithData, serialize its data
@@ -103,7 +108,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 		retryTask.TaskData = string(data)
 	}
 	fmt.Println("Retryable task data:", retryTask)
-	retryTask.TaskType = "any-task"
+	// DO NOT override task type - use the one from the task
 	// Save to database
 	err := retryTask.Save()
 	if err == nil {
@@ -130,7 +135,8 @@ func (q *AnyQueue) processTask(task Task) {
 // It uses registered task factories to reconstruct and execute retryable tasks.
 // This method is typically called periodically, either by a ticker or a scheduler.
 func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
-	// Ensure all task types are registered before processing
+	// Automatically ensure all task types are registered internally
+	// This removes the burden from client code
 	EnsureTaskTypesRegistered()
 
 	fmt.Println("Processing due tasks for queue:", q.Name())
@@ -148,18 +154,44 @@ func (q *AnyQueue) ProcessDueTasks(customFactory ...TaskFactory) {
 		var factoryErr error
 
 		// Try to find a task factory based on task type
+		// Create a new RetryableTask as a wrapper for execution
+		taskWrapper := RetryableTask{
+			TaskID:          t.TaskID,
+			RetryCount:      t.RetryCount,
+			MaxRetries:      t.MaxRetries,
+			RetryAfterHours: t.RetryAfterHours,
+			RetryAfterTime:  t.RetryAfterTime,
+			TaskData:        t.TaskData,
+			TaskType:        t.TaskType,
+		}
+		
 		// First try the custom factory if provided
 		if len(customFactory) > 0 && customFactory[0] != nil {
 			task, factoryErr = customFactory[0](t.TaskID, t.TaskData)
-		} else {
-			//
-			// Try to find a registered factory
-			factory, found := GetRegisteredTaskFactory(t)
-			if !found {
-				fmt.Printf("No factory found for task type: %s\n", t.TaskType)
-				continue
+			if factoryErr == nil {
+				taskWrapper.EmbeddedTask = task
 			}
-			task, factoryErr = factory(t.TaskID, t.TaskData)
+		} else if t.TaskData != "" {
+			// If we have task data, try to reconstruct the specific task
+			// In a real implementation, you'd use a more sophisticated mechanism here
+			// such as having a data envelope that includes the concrete type
+			fmt.Printf("Reconstructing task %s from data directly\n", t.TaskID)
+			var embedded Task = &taskWrapper
+			
+			// Check if the client code registered any task handlers
+			// This is an optional fallback, not a requirement
+			EnsureTaskTypesRegistered()
+			factory, found := GetRegisteredTaskFactory(t)
+			if found {
+				embedded, factoryErr = factory(t.TaskID, t.TaskData)
+			}
+			
+			taskWrapper.EmbeddedTask = embedded
+			task = &taskWrapper
+		} else {
+			// Simple case - no data, just use the wrapper task directly
+			task = &taskWrapper
+			factoryErr = nil
 		}
 
 		if factoryErr != nil {
@@ -266,8 +298,14 @@ func (q *AnyQueue) TotalEnqueued() int {
 // Implement this interface if your task needs to persist additional fields.
 type TaskWithData interface {
 	Task
+	// GetTaskType returns a unique identifier for this task type.
+	// This is used for debugging and monitoring, not for type-based dispatch.
+	GetTaskType() string
 	// MarshalData serializes the task data to JSON.
 	MarshalData() ([]byte, error)
 	// UnmarshalData deserializes the task data from JSON.
 	UnmarshalData([]byte) error
+	// Clone creates a new instance of this task with the same type but no data.
+	// This will be populated via UnmarshalData when reconstructing tasks.
+	Clone() TaskWithData
 }
