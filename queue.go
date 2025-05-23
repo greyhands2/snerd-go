@@ -103,6 +103,7 @@ func (q *AnyQueue) Enqueue(task Task) error {
 		retryTask.TaskData = string(data)
 	}
 	fmt.Println("Retryable task data:", retryTask)
+	retryTask.TaskType = "any-task"
 	// Save to database
 	err := retryTask.Save()
 	if err == nil {
