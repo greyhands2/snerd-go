@@ -418,7 +418,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	if err != nil {
 		return fmt.Errorf("marshal task for deletion: %w", err)
 	}
-
+	fmt.Println("TASK TO BE DELETED: ", existingTask)
 	// Open the file for appending
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -444,6 +444,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 
 	// Check if compaction should be triggered
 	if fs.shouldCompact() {
+		fmt.Println("COMPACTING THE FILE!!!!")
 		go func() {
 			err := fs.Compact()
 			if err != nil {
@@ -574,6 +575,7 @@ func (fs *FileStore) Compact() error {
 }
 
 func (fs *FileStore) shouldCompact() bool {
+	fmt.Println("Checking if compaction should be triggered")
 	// NOTE: This method should only be called when the mutex is already held
 	// by the caller, so we don't need to lock again here
 
