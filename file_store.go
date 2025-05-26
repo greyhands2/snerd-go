@@ -580,12 +580,18 @@ func (fs *FileStore) shouldCompact() bool {
 	// by the caller, so we don't need to lock again here
 
 	// File size threshold: > 20MB
-	if info, err := os.Stat(fs.filePath); err == nil && info.Size() > 20*1024*1024 {
+	info, err := os.Stat(fs.filePath)
+	if err != nil {
 		return true
 	}
-
+	if info.Size() > 20*1024*1024 {
+		fmt.Println("THE LOG FILE SIZE IS: ", info.Size())
+		return true
+	}
+	fmt.Println("THE LOG FILE SIZE IS: ", info.Size())
 	// Deleted ratio threshold: > 50%
 	if fs.totalTasks > 0 && float64(fs.deletedTasks)/float64(fs.totalTasks) > 0.5 {
+		fmt.Println("THE DELETED TASKS RATIO IS: ", float64(fs.deletedTasks)/float64(fs.totalTasks))
 		return true
 	}
 
