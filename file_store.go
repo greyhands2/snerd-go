@@ -332,7 +332,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 			}
 		}
 	}
-
+	fmt.Println("Got here!!!!")
 	return fs.CreateTask(latest)
 
 }
@@ -434,6 +434,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 
 	// Append the JSON entry followed by a newline
 	if _, err := f.Write(append(data, '\n')); err != nil {
+		fmt.Println("Error writing to file:", err)
 		return fmt.Errorf("write to file: %w", err)
 	}
 
@@ -487,7 +488,7 @@ func (fs *FileStore) Compact() error {
 			return
 		}
 	}(tempFile)
-	
+
 	// Stats for logging
 	var deletedTaskCount int
 
