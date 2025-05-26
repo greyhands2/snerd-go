@@ -88,6 +88,7 @@ func (fs *FileStore) RebuildMetaData() error {
 
 // CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
+	log.Printf("[CreateTask] Called for taskId=%s retryCount=%d deletedAt=%v", task.TaskID, task.RetryCount, task.DeletedAt)
 	fmt.Println("Creating task:", task)
 	// get the mutex lock and unlock out of the way
 	fs.mu.Lock()
@@ -113,12 +114,12 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 		}
 	}
 
-	fmt.Println("Opening file:", fs.filePath)
+	log.Printf("[CreateTask] Opening file: %s", fs.filePath)
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-	fmt.Println("Opened file:", f)
+	log.Printf("[CreateTask] Opened file: %v", f)
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
@@ -131,14 +132,20 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	if err != nil {
 		return fmt.Errorf("marshal task: %w", err)
 	}
-	fmt.Println("Writing task to file:", string(data))
+	log.Printf("[CreateTask] Writing task to file: %s", string(data))
 	_, err = f.Write(append(data, '\n'))
 	if err != nil {
+		log.Printf("[CreateTask] ERROR writing task to file: %v", err)
 		return fmt.Errorf("write task: %w", err)
+	} else {
+		log.Printf("[CreateTask] Successfully wrote task to file: %s", fs.filePath)
 	}
 	fmt.Println("Wrote task to file")
 	if err := f.Sync(); err != nil {
+		log.Printf("[CreateTask] ERROR syncing file: %v", err)
 		return fmt.Errorf("sync task: %w", err)
+	} else {
+		log.Printf("[CreateTask] Successfully synced file: %s", fs.filePath)
 	}
 	fmt.Println("Synced task to file")
 
@@ -149,7 +156,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	} else {
 		fs.totalTasks++
 	}
-	fmt.Println("Updated stats:", fs)
+	log.Printf("[CreateTask] Updated stats: totalTasks=%d deletedTasks=%d appendCount=%d", fs.totalTasks, fs.deletedTasks, fs.appendCount)
 
 	// Check if compaction should be triggered
 	if fs.shouldCompact() {
@@ -260,6 +267,7 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 }
 
 func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {
+	log.Printf("[UpdateTaskRetryConfig] Called for taskId=%s", taskID)
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -298,10 +306,12 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 	}
 
 	if latest == nil {
+		log.Printf("[UpdateTaskRetryConfig] ERROR: task with ID %s not found", taskID)
 		return fmt.Errorf("task with ID %s not found", taskID)
 	}
 
 	if latest.DeletedAt != nil {
+		log.Printf("[UpdateTaskRetryConfig] ERROR: cannot update a deleted task: %s", taskID)
 		return fmt.Errorf("cannot update a deleted task: %s", taskID)
 	}
 
@@ -334,6 +344,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		}
 	}
 	fmt.Println("Got here!!!!")
+	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d", latest.TaskID, latest.RetryCount)
 	return fs.CreateTask(latest)
 
 }
