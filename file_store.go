@@ -329,12 +329,13 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 
 		// Store error message as a string in TaskData for easier debugging
 		if latest.TaskData != "" {
-			// Try to parse existing data to add error information
 			var data map[string]interface{}
 			if err := json.Unmarshal([]byte(latest.TaskData), &data); err == nil {
 				// Add error information
 				data["lastError"] = errorObj.Error()
 				data["lastErrorTime"] = time.Now().Format(time.RFC3339)
+				data["retryCount"] = latest.RetryCount
+				data["retryAfterTime"] = latest.RetryAfterTime.Format(time.RFC3339)
 
 				// Re-serialize
 				if updatedData, err := json.Marshal(data); err == nil {
@@ -552,6 +553,10 @@ func (fs *FileStore) Compact() error {
 	fmt.Println("Writing to temp file:", tempFile.Name())
 	encoder := json.NewEncoder(tempFile)
 	for _, task := range taskMap {
+		if task.DeletedAt != nil {
+			// Skip soft-deleted tasks during compaction
+			continue
+		}
 		if err := encoder.Encode(task); err != nil {
 			err := tempFile.Close()
 			if err != nil {
