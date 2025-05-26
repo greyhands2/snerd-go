@@ -274,16 +274,19 @@ func (q *AnyQueue) ProcessDueTasks() {
 		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
 		err := handler(snerdTask.Parameters)
 		if err != nil {
+			fmt.Println("Error executing the TASK!!!!")
 			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
 			// Handle retry logic if the task has failed
 			if snerdTask.RetryCount < snerdTask.MaxRetries {
+				fmt.Println("RETRYING THE TASK!!!!")
 				// Calculate next retry time
 				snerdTask.RetryCount++
 
 				// Update task in file store with retry information
 				if q.fileStore != nil {
+					fmt.Println("CALLING QUEUE FILESTORE FOR RETRYING THE TASK!!!!")
 					// Convert to RetryableTask using the method on SnerdTask
 					retryableTask := snerdTask.ToRetryableTask()
 
@@ -342,6 +345,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 			// Delete the task after successful execution
 			if q.fileStore != nil {
+				fmt.Println("CALLING QUEUE FILESTORE FOR DELETING THE TASK AFTER SUCCESSFULT TASK!!!!")
 				// Ensure we soft-delete by using the proper method
 				deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
 				if deleteErr != nil {
