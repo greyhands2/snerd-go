@@ -31,7 +31,7 @@ type RetryableTask struct {
 	LastJobError *JobErrorReturn
 	CreatedAt    time.Time  `json:"-"`
 	UpdatedAt    time.Time  `json:"-"`
-	DeletedAt    *time.Time `json:"-,omitempty"`
+	DeletedAt    *time.Time `json:"deletedAt,omitempty"`
 	// Embedded task object - this is the actual task that will be executed
 	EmbeddedTask Task `json:"-"`
 }
