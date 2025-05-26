@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -575,29 +576,32 @@ func (fs *FileStore) Compact() error {
 }
 
 func (fs *FileStore) shouldCompact() bool {
-	fmt.Println("Checking if compaction should be triggered")
-	// NOTE: This method should only be called when the mutex is already held
-	// by the caller, so we don't need to lock again here
-
-	// File size threshold: > 20MB
+	// Caller must hold lock
 	info, err := os.Stat(fs.filePath)
 	if err != nil {
-		return true
+		log.Printf("Failed to stat file: %v", err)
+		return false // Be conservative or true based on your compaction model
 	}
+
+	// Check file size
 	if info.Size() > 20*1024*1024 {
-		fmt.Println("THE LOG FILE SIZE IS: ", info.Size())
-		return true
-	}
-	fmt.Println("THE LOG FILE SIZE IS: ", info.Size())
-	// Deleted ratio threshold: > 50%
-	if fs.totalTasks > 0 && float64(fs.deletedTasks)/float64(fs.totalTasks) > 0.5 {
-		fmt.Println("THE DELETED TASKS RATIO IS: ", float64(fs.deletedTasks)/float64(fs.totalTasks))
+		log.Printf("Compaction triggered by file size: %d bytes", info.Size())
 		return true
 	}
 
-	// Append count threshold: every 10,000 appends
+	// Check deleted ratio
+	if fs.totalTasks > 0 {
+		ratio := float64(fs.deletedTasks) / float64(fs.totalTasks)
+		if ratio > 0.5 {
+			log.Printf("Compaction triggered by deleted task ratio: %.2f", ratio)
+			return true
+		}
+	}
+
+	// Check append count
 	if fs.appendCount >= 10000 {
-		fs.appendCount = 0 // reset counter
+		log.Println("Compaction triggered by append count")
+		fs.appendCount = 0
 		return true
 	}
 
