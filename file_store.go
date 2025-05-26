@@ -553,17 +553,10 @@ func (fs *FileStore) Compact() error {
 	// flush tempfile to disk
 	fmt.Println("Flushing tempfile to disk")
 	if err := tempFile.Sync(); err != nil {
-		err := tempFile.Close()
-		if err != nil {
-			return err
-		}
+
 		return fmt.Errorf("sync tempfile: %w", err)
 	}
 
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("close tempfile: %w", err)
-	}
-	fmt.Println("Closed tempfile")
 	// finally atomically replace old file
 	fmt.Println("Renaming tempfile to file")
 	if err := os.Rename(tempFilePath, fs.filePath); err != nil {
