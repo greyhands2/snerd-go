@@ -426,6 +426,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	// Mark the task as deleted while preserving all other data
 	now := time.Now()
 	existingTask.DeletedAt = &now
+	fmt.Printf("[DeleteTask] Set DeletedAt to: %v (isZero=%v)\n", existingTask.DeletedAt, existingTask.DeletedAt.IsZero())
 
 	// Marshal to JSON
 	data, err := json.Marshal(existingTask)
@@ -446,6 +447,8 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 		}
 	}(f)
 
+	// Print the value of DeletedAt before marshaling
+	fmt.Printf("[DeleteTask] About to marshal task with DeletedAt=%v (isZero=%v)\n", existingTask.DeletedAt, existingTask.DeletedAt.IsZero())
 	// Print the JSON being written for debug
 	fmt.Printf("[DeleteTask] Writing deleted task to file: %s\n", string(data))
 	// Append the JSON entry followed by a newline
