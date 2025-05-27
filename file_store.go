@@ -218,6 +218,7 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 
 		// Skip deleted tasks
 		if t.DeletedAt != nil {
+			fmt.Printf("[ReadTasks] Skipping deleted task: %s (deletedAt=%v)\n", t.TaskID, t.DeletedAt)
 			delete(taskMap, t.TaskID)
 			continue
 		}
@@ -445,6 +446,8 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 		}
 	}(f)
 
+	// Print the JSON being written for debug
+	fmt.Printf("[DeleteTask] Writing deleted task to file: %s\n", string(data))
 	// Append the JSON entry followed by a newline
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		fmt.Println("Error writing to file:", err)

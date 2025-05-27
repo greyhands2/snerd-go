@@ -48,15 +48,15 @@ func (t *RetryableTask) Execute() error {
 		handlersMutex.RLock()
 		handler, exists := taskHandlers[t.TaskType]
 		handlersMutex.RUnlock()
-		
+
 		if exists && handler != nil {
 			// Convert RetryableTask to SnerdTask to extract parameters properly
 			snerdTask := FromRetryableTask(t)
-			
+
 			// Execute the task with its parameters
 			return handler(snerdTask.Parameters)
 		}
-		
+
 		// Fallback to legacy factory approach
 		factory, found := taskFactories[t.TaskType]
 		if found && factory != nil {
@@ -347,7 +347,7 @@ func (t *RetryableTask) UpdateTaskRetryConfigWithError(taskId string, errorObj e
 	if err != nil {
 		return err
 	}
-	
+
 	// Call the updated method with error information
 	if err := fileStore.UpdateTaskRetryConfig(taskId, errorObj); err != nil {
 		return err
