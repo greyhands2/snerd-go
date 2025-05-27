@@ -79,7 +79,7 @@ type SnerdTask struct {
 	// Timestamps for record-keeping
 	CreatedAt time.Time  `json:"-"`           // When the task was created
 	UpdatedAt time.Time  `json:"-"`           // When the task was last updated
-	DeletedAt *time.Time `json:"-,omitempty"` // Soft deletion timestamp
+	DeletedAt *time.Time `json:"deletedAt,omitempty"` // Soft deletion timestamp
 }
 
 // NewSnerdTask creates a new task with the specified parameters

@@ -223,7 +223,7 @@ func (q *AnyQueue) processTask(task Task) {
 	}
 }
 
-// ProcessDueTasks processes all tasks that are due for execution (retry time has passed).
+// ProcessDueTasks processes all tasks that are due for execution (retry time has passed)..
 func (q *AnyQueue) ProcessDueTasks() {
 	// Step 1: Load all tasks from the FileStore
 	if q.fileStore == nil {
@@ -387,7 +387,7 @@ func (q *AnyQueue) Size() int {
 	return len(tasks)
 }
 
-// RemainingCapacity returns the number of additional tasks that can be enqueued before reaching maxSize.
+// RemainingCapacity returns the number of additional tasks that can be enqueued before reaching maxSize..
 func (q *AnyQueue) RemainingCapacity() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
