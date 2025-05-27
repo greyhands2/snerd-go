@@ -32,9 +32,9 @@ type OnMaxRetryHandler func(parameters string) error
 
 // Global handler registry with mutex for thread safety
 var (
-	taskHandlers       = make(map[string]TaskHandler)
-	maxRetryHandlers   = make(map[string]OnMaxRetryHandler)
-	handlersMutex      = &sync.RWMutex{}
+	taskHandlers     = make(map[string]TaskHandler)
+	maxRetryHandlers = make(map[string]OnMaxRetryHandler)
+	handlersMutex    = &sync.RWMutex{}
 )
 
 // RegisterTaskHandler registers a handler for a specific task type
@@ -60,31 +60,31 @@ type JobErrorReturn struct {
 // SnerdTask is a retryable task that stores parameters instead of implementations
 type SnerdTask struct {
 	// Core Task Identification
-	TaskID          string    `json:"taskId"`           // Unique identifier for the task
-	
+	TaskID string `json:"taskId"` // Unique identifier for the task
+
 	// Retry Configuration
-	RetryCount      int       `json:"retryCount"`       // Current retry count
-	MaxRetries      int       `json:"maxRetries"`       // Maximum number of retries allowed
-	RetryAfterHours float64   `json:"retryAfterHours"`  // Hours to wait before retrying
-	RetryAfterTime  time.Time `json:"retryAfterTime"`   // Timestamp for next retry attempt
-	
+	RetryCount      int       `json:"retryCount"`      // Current retry count
+	MaxRetries      int       `json:"maxRetries"`      // Maximum number of retries allowed
+	RetryAfterHours float64   `json:"retryAfterHours"` // Hours to wait before retrying
+	RetryAfterTime  time.Time `json:"retryAfterTime"`  // Timestamp for next retry attempt
+
 	// Task Execution Data
-	TaskType        string    `json:"taskType"`         // Type of task (maps to registered handler)
-	Parameters      string    `json:"parameters"`       // JSON-encoded parameters for the task
-	
+	TaskType   string `json:"taskType"`   // Type of task (maps to registered handler)
+	Parameters string `json:"parameters"` // JSON-encoded parameters for the task
+
 	// Error Tracking
-	LastErrorObj    error     `json:"lastErrorObj"`     // Last error that occurred
-	LastJobError    *JobErrorReturn `json:"lastJobError"` // Detailed error information
-	
+	LastErrorObj error           `json:"lastErrorObj"` // Last error that occurred
+	LastJobError *JobErrorReturn `json:"lastJobError"` // Detailed error information
+
 	// Timestamps for record-keeping
-	CreatedAt       time.Time  `json:"-"`               // When the task was created
-	UpdatedAt       time.Time  `json:"-"`               // When the task was last updated
-	DeletedAt       *time.Time `json:"-,omitempty"`     // Soft deletion timestamp
+	CreatedAt time.Time  `json:"-"`           // When the task was created
+	UpdatedAt time.Time  `json:"-"`           // When the task was last updated
+	DeletedAt *time.Time `json:"-,omitempty"` // Soft deletion timestamp
 }
 
 // NewSnerdTask creates a new task with the specified parameters
 func NewSnerdTask(
-	taskID string, 
+	taskID string,
 	taskType string,
 	parameters interface{},
 	maxRetries int,
@@ -95,7 +95,7 @@ func NewSnerdTask(
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize parameters: %w", err)
 	}
-	
+
 	// For new tasks, set RetryAfterTime to now (immediately due)
 	// Only tasks being retried will have RetryAfterTime set to the future
 	return &SnerdTask{
@@ -140,23 +140,23 @@ func (t *SnerdTask) GetRetryAfterHours() float64 {
 func (t *SnerdTask) Execute() error {
 	// Log execution for debugging
 	fmt.Printf("Executing SnerdTask: ID=%s, Type=%s\n", t.TaskID, t.TaskType)
-	
+
 	// Get the handler for this task type
 	handlersMutex.RLock()
 	handler, exists := taskHandlers[t.TaskType]
 	handlersMutex.RUnlock()
-	
+
 	if !exists || handler == nil {
 		return fmt.Errorf("no handler registered for task type: %s", t.TaskType)
 	}
-	
+
 	// Log parameter info for debugging
 	if t.Parameters == "" {
 		fmt.Printf("Warning: Empty parameters for task %s\n", t.TaskID)
 	} else if !strings.HasPrefix(t.Parameters, "{") {
 		fmt.Printf("Warning: Non-JSON parameters for task %s: %s\n", t.TaskID, t.Parameters)
 	}
-	
+
 	// Execute the task handler with the parameters
 	return handler(t.Parameters)
 }
@@ -166,13 +166,13 @@ func (t *SnerdTask) OnMaxRetryReached(contextProvider func() interface{}) error 
 	handlersMutex.RLock()
 	handler, exists := maxRetryHandlers[t.TaskType]
 	handlersMutex.RUnlock()
-	
+
 	if !exists || handler == nil {
 		// Default behavior if no handler is registered
 		fmt.Printf("Task %s (type=%s) reached max retries with no handler\n", t.TaskID, t.TaskType)
 		return nil
 	}
-	
+
 	// Execute the max retry handler
 	return handler(t.Parameters)
 }
@@ -203,7 +203,7 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 	}
 }
 
-// CreateTask is a convenience function that creates a new task with the given parameters
+// CreateTask is a convenience function that creates a new task with the given parameters.
 // This is the simplified client API function for creating parameter-based tasks
 func CreateTask(taskID string, taskType string, parameters interface{}, maxRetries int, retryAfterHours float64) (*SnerdTask, error) {
 	return NewSnerdTask(taskID, taskType, parameters, maxRetries, retryAfterHours)
@@ -226,7 +226,7 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		UpdatedAt:       rt.UpdatedAt,
 		DeletedAt:       rt.DeletedAt,
 	}
-	
+
 	// Improved parameter extraction with better handling of nested JSON structures
 	// Direct case: TaskData is already in the format we need
 	if rt.TaskType != "" && strings.HasPrefix(rt.TaskData, "{") && !strings.Contains(rt.TaskData, "parameters") {
@@ -245,13 +245,13 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 			case string:
 				// Already a string, use directly
 				task.Parameters = p
-				
+
 			case map[string]interface{}:
 				// Parameters are a nested map, marshal to JSON
 				if paramsJSON, err := json.Marshal(p); err == nil {
 					task.Parameters = string(paramsJSON)
 				}
-				
+
 			default:
 				// Try to marshal unknown type to JSON
 				if paramsJSON, err := json.Marshal(params); err == nil {
@@ -275,7 +275,7 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 					return task
 				}
 			}
-			
+
 			// As a last resort, use the entire TaskData as parameters
 			task.Parameters = rt.TaskData
 		}
@@ -283,7 +283,6 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		// If we can't parse the TaskData as JSON, use it directly as parameters
 		task.Parameters = rt.TaskData
 	}
-	
+
 	return task
 }
-
