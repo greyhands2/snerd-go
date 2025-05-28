@@ -158,20 +158,20 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	}
 	log.Printf("[CreateTask] Updated stats: totalTasks=%d deletedTasks=%d appendCount=%d", fs.totalTasks, fs.deletedTasks, fs.appendCount)
 
-	// Check if compaction should be triggered
-	if fs.shouldCompact() {
-		fmt.Println("Triggering compaction")
-		go func() {
-			fmt.Println("Compacting file")
-			err := fs.Compact()
-			if err != nil {
-				fmt.Printf("Error compacting file: %s\n", err)
-			}
-			fmt.Println("Compacted file")
-		}()
-
-	}
-	fmt.Println("Done with compaction")
+	//// Check if compaction should be triggered
+	//if fs.shouldCompact() {
+	//	fmt.Println("Triggering compaction")
+	//	go func() {
+	//		fmt.Println("Compacting file")
+	//		err := fs.Compact()
+	//		if err != nil {
+	//			fmt.Printf("Error compacting file: %s\n", err)
+	//		}
+	//		fmt.Println("Compacted file")
+	//	}()
+	//
+	//}
+	//fmt.Println("Done with compaction")
 	return nil
 
 }
@@ -462,16 +462,16 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	fs.deletedTasks++ // This is a delete operation, so increment the deletedTasks counter
 
 	// Check if compaction should be triggered
-	if fs.shouldCompact() {
-		fmt.Println("COMPACTING THE FILE!!!!")
-		go func() {
-			err := fs.Compact()
-			if err != nil {
-				fmt.Printf("Error compacting file: %s\n", err)
-			}
-		}()
-
-	}
+	//if fs.shouldCompact() {
+	//	fmt.Println("COMPACTING THE FILE!!!!")
+	//	go func() {
+	//		err := fs.Compact()
+	//		if err != nil {
+	//			fmt.Printf("Error compacting file: %s\n", err)
+	//		}
+	//	}()
+	//
+	//}
 
 	return nil
 }
