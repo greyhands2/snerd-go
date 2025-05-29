@@ -76,7 +76,7 @@ func (fs *FileStore) RebuildMetaData() error {
 		}
 
 		fs.appendCount++
-		if t.DeletedAt != nil {
+		if t.DeletedAt != nil && !t.DeletedAt.IsZero() {
 			fs.deletedTasks++
 		} else {
 			fs.totalTasks++
@@ -151,7 +151,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 
 	// Track stats
 	fs.appendCount++
-	if task.DeletedAt != nil {
+	if task.DeletedAt != nil && !task.DeletedAt.IsZero() {
 		fs.deletedTasks++
 	} else {
 		fs.totalTasks++
@@ -217,7 +217,7 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 		}
 
 		// Skip deleted tasks
-		if t.DeletedAt != nil {
+		if t.DeletedAt != nil && !t.DeletedAt.IsZero() {
 			fmt.Printf("[ReadTasks] Skipping deleted task: %s (deletedAt=%v)\n", t.TaskID, t.DeletedAt)
 			delete(taskMap, t.TaskID)
 			continue
@@ -311,7 +311,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		return fmt.Errorf("task with ID %s not found", taskID)
 	}
 
-	if latest.DeletedAt != nil {
+	if latest.DeletedAt != nil && !latest.DeletedAt.IsZero() {
 		log.Printf("[UpdateTaskRetryConfig] ERROR: cannot update a deleted task: %s", taskID)
 		return fmt.Errorf("cannot update a deleted task: %s", taskID)
 	}
@@ -418,7 +418,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	}
 
 	// Check if already deleted
-	if existingTask.DeletedAt != nil {
+	if existingTask.DeletedAt != nil && !existingTask.DeletedAt.IsZero() {
 		fmt.Printf("Task %s already marked as deleted\n", taskID)
 		return nil
 	}
@@ -539,7 +539,7 @@ func (fs *FileStore) Compact() error {
 		}
 
 		// Track deleted tasks
-		if t.DeletedAt != nil {
+		if t.DeletedAt != nil && !t.DeletedAt.IsZero() {
 			deleted[t.TaskID] = true
 			deletedTaskCount++
 			continue
@@ -559,7 +559,7 @@ func (fs *FileStore) Compact() error {
 	fmt.Println("Writing to temp file:", tempFile.Name())
 	encoder := json.NewEncoder(tempFile)
 	for _, task := range taskMap {
-		if task.DeletedAt != nil {
+		if task.DeletedAt != nil && !task.DeletedAt.IsZero() {
 			// Skip soft-deleted tasks during compaction
 			continue
 		}

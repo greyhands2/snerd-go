@@ -148,6 +148,8 @@ func (q *AnyQueue) Enqueue(task Task) error {
 // approach that doesn't require client-side task registration
 func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 	// Convert the SnerdTask to a RetryableTask for storage
+	zeroTime := time.Time{}
+	task.DeletedAt = &zeroTime
 	retryableTask := task.ToRetryableTask()
 
 	// Store the task in the file store
