@@ -97,12 +97,14 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	// Ensure parent directory exists before creating or appending to the file
 	dirPath := filepath.Dir(fs.filePath)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		log.Printf("Error dey here!!!!! %v", err)
 		return fmt.Errorf("create directory: %w", err)
 	}
 
 	// Make sure the .snerdata directory is hidden on Windows
 	// On Unix-like systems, directories starting with a dot are already hidden
 	if runtime.GOOS == "windows" {
+		fmt.Println("I DOUBT IT IS HERE!!!!!!")
 		// For Windows, we'll use the attrib command to hide the directory
 		// Get the parent directory of our tasks folder to find the .snerdata folder
 		snerDataDir := filepath.Join(filepath.Dir(dirPath), ".snerdata")
@@ -117,6 +119,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	log.Printf("[CreateTask] Opening file: %s", fs.filePath)
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		log.Printf("Error dey here 111 !!!!! %v", err)
 		return fmt.Errorf("open file: %w", err)
 	}
 	log.Printf("[CreateTask] Opened file: %v", f)
@@ -316,7 +319,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		return fmt.Errorf("cannot update a deleted task: %s", taskID)
 	}
 
-	latest.RetryCount++
+	latest.RetryCount = latest.RetryCount + 1
 	latest.RetryAfterTime = time.Now().Add(time.Duration(latest.RetryAfterHours) * time.
 		Hour)
 

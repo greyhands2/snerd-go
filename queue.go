@@ -164,6 +164,7 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 
 	// Process immediately if the task is due
 	if task.RetryAfterTime.Before(time.Now()) {
+		fmt.Println("I DOUBT THIS HAPPENS!!!!!!!")
 		go func() {
 			// Execute the task
 			if err := task.Execute(); err != nil {
