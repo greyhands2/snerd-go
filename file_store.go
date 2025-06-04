@@ -88,7 +88,7 @@ func (fs *FileStore) RebuildMetaData() error {
 
 // CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
-	log.Printf("[CreateTask] Called for taskId=%s retryCount=%d deletedAt=%v", task.TaskID, task.RetryCount, task.DeletedAt)
+	log.Printf("[CreateTask] Called for taskId=%s retryCount=%d deletedAt=%v\n", task.TaskID, task.RetryCount, task.DeletedAt)
 	fmt.Println("Creating task:", task)
 	// get the mutex lock and unlock out of the way
 	fs.mu.Lock()
@@ -97,14 +97,14 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	// Ensure parent directory exists before creating or appending to the file
 	dirPath := filepath.Dir(fs.filePath)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		log.Printf("Error dey here!!!!! %v", err)
+		log.Printf("Error dey here!!!!! %v\n", err)
 		return fmt.Errorf("create directory: %w", err)
 	}
 
 	// Make sure the .snerdata directory is hidden on Windows
 	// On Unix-like systems, directories starting with a dot are already hidden
 	if runtime.GOOS == "windows" {
-		fmt.Println("I DOUBT IT IS HERE!!!!!!")
+		fmt.Println("I DOUBT IT IS HERE FOR WINDOWS!!!!!!")
 		// For Windows, we'll use the attrib command to hide the directory
 		// Get the parent directory of our tasks folder to find the .snerdata folder
 		snerDataDir := filepath.Join(filepath.Dir(dirPath), ".snerdata")
@@ -116,13 +116,13 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 		}
 	}
 
-	log.Printf("[CreateTask] Opening file: %s", fs.filePath)
+	log.Printf("[CreateTask] Opening file: %s\n", fs.filePath)
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Printf("Error dey here 111 !!!!! %v", err)
+		log.Printf("Error dey here 111 !!!!! %v\n", err)
 		return fmt.Errorf("open file: %w", err)
 	}
-	log.Printf("[CreateTask] Opened file: %v", f)
+	log.Printf("[CreateTask] Opened file: %v\n", f)
 	defer func(f *os.File) {
 		err := f.Close()
 		if err != nil {
@@ -135,20 +135,20 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	if err != nil {
 		return fmt.Errorf("marshal task: %w", err)
 	}
-	log.Printf("[CreateTask] Writing task to file: %s", string(data))
+	log.Printf("[CreateTask] Writing task to file: %s\n", string(data))
 	_, err = f.Write(append(data, '\n'))
 	if err != nil {
-		log.Printf("[CreateTask] ERROR writing task to file: %v", err)
+		log.Printf("[CreateTask] ERROR writing task to file: %v\n", err)
 		return fmt.Errorf("write task: %w", err)
 	} else {
-		log.Printf("[CreateTask] Successfully wrote task to file: %s", fs.filePath)
+		log.Printf("[CreateTask] Successfully wrote task to file: %s\n", fs.filePath)
 	}
 	fmt.Println("Wrote task to file")
 	if err := f.Sync(); err != nil {
-		log.Printf("[CreateTask] ERROR syncing file: %v", err)
+		log.Printf("[CreateTask] ERROR syncing file: %v\n", err)
 		return fmt.Errorf("sync task: %w", err)
 	} else {
-		log.Printf("[CreateTask] Successfully synced file: %s", fs.filePath)
+		log.Printf("[CreateTask] Successfully synced file: %s\n", fs.filePath)
 	}
 	fmt.Println("Synced task to file")
 
@@ -159,22 +159,22 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	} else {
 		fs.totalTasks++
 	}
-	log.Printf("[CreateTask] Updated stats: totalTasks=%d deletedTasks=%d appendCount=%d", fs.totalTasks, fs.deletedTasks, fs.appendCount)
+	log.Printf("[CreateTask] Updated stats: totalTasks=%d deletedTasks=%d appendCount=%d\n", fs.totalTasks, fs.deletedTasks, fs.appendCount)
 
 	//// Check if compaction should be triggered
-	//if fs.shouldCompact() {
-	//	fmt.Println("Triggering compaction")
-	//	go func() {
-	//		fmt.Println("Compacting file")
-	//		err := fs.Compact()
-	//		if err != nil {
-	//			fmt.Printf("Error compacting file: %s\n", err)
-	//		}
-	//		fmt.Println("Compacted file")
-	//	}()
-	//
-	//}
-	//fmt.Println("Done with compaction")
+	if fs.shouldCompact() {
+		fmt.Println("Triggering compaction")
+		go func() {
+			fmt.Println("Compacting file")
+			err := fs.Compact()
+			if err != nil {
+				fmt.Printf("Error compacting file: %s\n", err)
+			}
+			fmt.Println("Compacted file")
+		}()
+
+	}
+	fmt.Println("Done with compaction")
 	return nil
 
 }
@@ -271,7 +271,7 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 }
 
 func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {
-	log.Printf("[UpdateTaskRetryConfig] Called for taskId=%s", taskID)
+	log.Printf("[UpdateTaskRetryConfig] Called for taskId=%s\n", taskID)
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -310,14 +310,16 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 	}
 
 	if latest == nil {
-		log.Printf("[UpdateTaskRetryConfig] ERROR: task with ID %s not found", taskID)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: task with ID %s not found\n", taskID)
 		return fmt.Errorf("task with ID %s not found", taskID)
 	}
 
 	if latest.DeletedAt != nil && !latest.DeletedAt.IsZero() {
-		log.Printf("[UpdateTaskRetryConfig] ERROR: cannot update a deleted task: %s", taskID)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: cannot update a deleted task: %s\n", taskID)
 		return fmt.Errorf("cannot update a deleted task: %s", taskID)
 	}
+
+	fmt.Printf("WHAT IS THE MOST RECENT OF THE TASK !!!!!! ????? %s, %v\n", taskID, latest)
 
 	latest.RetryCount = latest.RetryCount + 1
 	latest.RetryAfterTime = time.Now().Add(time.Duration(latest.RetryAfterHours) * time.
@@ -349,7 +351,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		}
 	}
 	fmt.Println("Got here!!!!")
-	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d", latest.TaskID, latest.RetryCount)
+	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d\n", latest.TaskID, latest.RetryCount)
 	return fs.CreateTask(latest)
 
 }
@@ -465,16 +467,16 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	fs.deletedTasks++ // This is a delete operation, so increment the deletedTasks counter
 
 	// Check if compaction should be triggered
-	//if fs.shouldCompact() {
-	//	fmt.Println("COMPACTING THE FILE!!!!")
-	//	go func() {
-	//		err := fs.Compact()
-	//		if err != nil {
-	//			fmt.Printf("Error compacting file: %s\n", err)
-	//		}
-	//	}()
-	//
-	//}
+	if fs.shouldCompact() {
+		fmt.Println("COMPACTING THE FILE!!!!")
+		go func() {
+			err := fs.Compact()
+			if err != nil {
+				fmt.Printf("Error compacting file: %s\n", err)
+			}
+		}()
+
+	}
 
 	return nil
 }
@@ -597,13 +599,13 @@ func (fs *FileStore) shouldCompact() bool {
 	// Caller must hold lock
 	info, err := os.Stat(fs.filePath)
 	if err != nil {
-		log.Printf("Failed to stat file: %v", err)
+		log.Printf("Failed to stat file: %v\n", err)
 		return false // Be conservative or true based on your compaction model
 	}
 
 	// Check file size
 	if info.Size() > 20*1024*1024 {
-		log.Printf("Compaction triggered by file size: %d bytes", info.Size())
+		log.Printf("Compaction triggered by file size: %d bytes\n", info.Size())
 		return true
 	}
 
@@ -611,7 +613,7 @@ func (fs *FileStore) shouldCompact() bool {
 	if fs.totalTasks > 0 {
 		ratio := float64(fs.deletedTasks) / float64(fs.totalTasks)
 		if ratio > 0.5 {
-			log.Printf("Compaction triggered by deleted task ratio: %.2f", ratio)
+			log.Printf("Compaction triggered by deleted task ratio: %.2f\n", ratio)
 			return true
 		}
 	}

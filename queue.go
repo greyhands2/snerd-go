@@ -164,11 +164,12 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 
 	// Process immediately if the task is due
 	if task.RetryAfterTime.Before(time.Now()) {
-		fmt.Println("I DOUBT THIS HAPPENS!!!!!!!")
+		fmt.Println("THE FIRST TASK WOULD CERTAINLY HAPPEN!!!!!!!")
 		go func() {
 			// Execute the task
 			if err := task.Execute(); err != nil {
 				// Update retry configuration if we haven't exceeded max retries
+				fmt.Println("THERE WAS AN ERROR", task.RetryCount, task.MaxRetries)
 				if task.RetryCount < task.MaxRetries {
 					// Let the FileStore update the retry config and calculate the next retry time
 					// The UpdateTaskRetryConfig method will handle:
