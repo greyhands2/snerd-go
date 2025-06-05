@@ -89,7 +89,9 @@ func (fs *FileStore) RebuildMetaData() error {
 // CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
 	log.Printf("[CreateTask] Called for taskId=%s retryCount=%d deletedAt=%v\n", task.TaskID, task.RetryCount, task.DeletedAt)
-	fmt.Println("Creating task:", task)
+
+	fmt.Printf("Creating task: ID=%s RetryCount=%d RetryAfterTime=%v TaskType=%s\n", task.TaskID, task.RetryCount, task.RetryAfterTime, task.TaskType)
+
 	// get the mutex lock and unlock out of the way
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -133,24 +135,35 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 
 	data, err := json.Marshal(task)
 	if err != nil {
+		log.Printf("[CreateTask] ERROR marshaling task %s: %v\n", task.TaskID, err)
 		return fmt.Errorf("marshal task: %w", err)
 	}
+
 	log.Printf("[CreateTask] Writing task to file: %s\n", string(data))
-	_, err = f.Write(append(data, '\n'))
+	log.Printf("[CreateTask] File path: %s\n", fs.filePath)
+	log.Printf("[CreateTask] File descriptor: %v\n", f.Fd())
+
+	n, err := f.Write(append(data, '\n'))
 	if err != nil {
-		log.Printf("[CreateTask] ERROR writing task to file: %v\n", err)
-		return fmt.Errorf("write task: %w", err)
-	} else {
-		log.Printf("[CreateTask] Successfully wrote task to file: %s\n", fs.filePath)
+		fileInfo, statErr := f.Stat()
+		if statErr != nil {
+			log.Printf("[CreateTask] ERROR getting file info: %v\n", statErr)
+		} else {
+			log.Printf("[CreateTask] File info: %+v\n", fileInfo)
+		}
+		log.Printf("[CreateTask] ERROR writing task to file: %v (wrote %d bytes)\n", err, n)
+		return fmt.Errorf("write task: %w (wrote %d bytes)", err, n)
 	}
-	fmt.Println("Wrote task to file")
+	log.Printf("[CreateTask] Successfully wrote %d bytes to file: %s\n", n, fs.filePath)
+
+	log.Printf("Creating task: ID=%s RetryCount=%d RetryAfterTime=%v TaskType=%s\n",
+		task.TaskID, task.RetryCount, task.RetryAfterTime, task.TaskType)
+
 	if err := f.Sync(); err != nil {
 		log.Printf("[CreateTask] ERROR syncing file: %v\n", err)
 		return fmt.Errorf("sync task: %w", err)
-	} else {
-		log.Printf("[CreateTask] Successfully synced file: %s\n", fs.filePath)
 	}
-	fmt.Println("Synced task to file")
+	log.Printf("[CreateTask] Successfully synced file: %s\n", fs.filePath)
 
 	// Track stats
 	fs.appendCount++
@@ -272,21 +285,14 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 
 func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {
 	log.Printf("[UpdateTaskRetryConfig] Called for taskId=%s\n", taskID)
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
 
+	// First, find the latest version of the task
+	fs.mu.Lock()
 	f, err := os.Open(fs.filePath)
 	if err != nil {
+		fs.mu.Unlock()
 		return fmt.Errorf("open file: %w", err)
 	}
-
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			fmt.Printf("Error closing file: %s\n", err)
-			return
-		}
-	}(f)
 
 	var latest *RetryableTask
 	scanner := bufio.NewScanner(f)
@@ -302,57 +308,68 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		if t.TaskID == taskID {
 			latest = &t
 		}
+	}
 
+	// Close the file before releasing the mutex
+	if err := f.Close(); err != nil {
+		fs.mu.Unlock()
+		return fmt.Errorf("close file: %w", err)
 	}
 
 	if err := scanner.Err(); err != nil {
+		fs.mu.Unlock()
 		return fmt.Errorf("scan file: %w", err)
 	}
 
 	if latest == nil {
+		fs.mu.Unlock()
 		log.Printf("[UpdateTaskRetryConfig] ERROR: task with ID %s not found\n", taskID)
 		return fmt.Errorf("task with ID %s not found", taskID)
 	}
 
 	if latest.DeletedAt != nil && !latest.DeletedAt.IsZero() {
+		fs.mu.Unlock()
 		log.Printf("[UpdateTaskRetryConfig] ERROR: cannot update a deleted task: %s\n", taskID)
 		return fmt.Errorf("cannot update a deleted task: %s", taskID)
 	}
 
-	fmt.Printf("WHAT IS THE MOST RECENT OF THE TASK !!!!!! ????? %s, %v\n", taskID, latest)
+	// Create a copy of the task to avoid data races
+	updatedTask := *latest
+	fs.mu.Unlock() // Release the mutex before calling CreateTask
 
-	latest.RetryCount = latest.RetryCount + 1
-	latest.RetryAfterTime = time.Now().Add(time.Duration(latest.RetryAfterHours) * time.
-		Hour)
+	// Update the task
+	updatedTask.RetryCount = updatedTask.RetryCount + 1
+	updatedTask.RetryAfterTime = time.Now().Add(time.Duration(updatedTask.RetryAfterHours) * time.Hour)
 
 	// Store error information if provided
 	if errorObj != nil {
 		// Create a JobErrorReturn for structured error data
-		latest.LastJobError = &JobErrorReturn{
+		updatedTask.LastJobError = &JobErrorReturn{
 			ErrorObj:    errorObj,
 			RetryWorthy: true, // Assuming it's retry-worthy since we're updating retry config
 		}
 
 		// Store error message as a string in TaskData for easier debugging
-		if latest.TaskData != "" {
+		if updatedTask.TaskData != "" {
 			var data map[string]interface{}
-			if err := json.Unmarshal([]byte(latest.TaskData), &data); err == nil {
+			if err := json.Unmarshal([]byte(updatedTask.TaskData), &data); err == nil {
 				// Add error information
 				data["lastError"] = errorObj.Error()
 				data["lastErrorTime"] = time.Now().Format(time.RFC3339)
-				data["retryCount"] = latest.RetryCount
-				data["retryAfterTime"] = latest.RetryAfterTime.Format(time.RFC3339)
+				data["retryCount"] = updatedTask.RetryCount
+				data["retryAfterTime"] = updatedTask.RetryAfterTime.Format(time.RFC3339)
 
 				// Re-serialize
 				if updatedData, err := json.Marshal(data); err == nil {
-					latest.TaskData = string(updatedData)
+					updatedTask.TaskData = string(updatedData)
 				}
 			}
 		}
 	}
-	fmt.Println("Got here!!!!")
-	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d\n", latest.TaskID, latest.RetryCount)
-	return fs.CreateTask(latest)
+
+	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d\n",
+		updatedTask.TaskID, updatedTask.RetryCount)
+	return fs.CreateTask(&updatedTask)
 
 }
 
