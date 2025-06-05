@@ -77,8 +77,8 @@ type SnerdTask struct {
 	LastJobError *JobErrorReturn `json:"lastJobError"` // Detailed error information
 
 	// Timestamps for record-keeping
-	CreatedAt time.Time  `json:"-"`           // When the task was created
-	UpdatedAt time.Time  `json:"-"`           // When the task was last updated
+	CreatedAt time.Time  `json:"-"`                   // When the task was created
+	UpdatedAt time.Time  `json:"-"`                   // When the task was last updated
 	DeletedAt *time.Time `json:"deletedAt,omitempty"` // Soft deletion timestamp
 }
 
@@ -114,6 +114,10 @@ func NewSnerdTask(
 // GetTaskID returns the task ID
 func (t *SnerdTask) GetTaskID() string {
 	return t.TaskID
+}
+func (t *SnerdTask) String() string {
+	return fmt.Sprintf("RetryableTask{TaskID: %s, RetryCount: %d, TaskType: %s}",
+		t.TaskID, t.RetryCount, t.TaskType)
 }
 
 // GetRetryCount returns the current retry count
