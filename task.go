@@ -2,6 +2,7 @@ package snerd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -52,9 +53,54 @@ func RegisterMaxRetryHandler(taskType string, handler OnMaxRetryHandler) {
 }
 
 // JobErrorReturn contains error information from task execution
+// JobErrorReturn holds error information for a failed job
+// and implements custom JSON marshaling/unmarshaling to handle the error type
 type JobErrorReturn struct {
 	ErrorObj    error
-	RetryWorthy bool
+	ErrorString string `json:"error"` // Used for JSON serialization
+	RetryWorthy bool   `json:"retry_worthy"`
+}
+
+// MarshalJSON implements json.Marshaler interface
+func (j JobErrorReturn) MarshalJSON() ([]byte, error) {
+	// Create a struct that can be safely marshaled
+	temp := struct {
+		ErrorString string `json:"error"`
+		RetryWorthy bool   `json:"retry_worthy"`
+	}{
+		ErrorString: "",
+		RetryWorthy: j.RetryWorthy,
+	}
+
+	// Convert error to string if not nil
+	if j.ErrorObj != nil {
+		temp.ErrorString = j.ErrorObj.Error()
+	}
+
+	return json.Marshal(temp)
+}
+
+// UnmarshalJSON implements json.Unmarshaler interface
+func (j *JobErrorReturn) UnmarshalJSON(data []byte) error {
+	// Create a temporary struct to unmarshal into
+	temp := struct {
+		ErrorString string `json:"error"`
+		RetryWorthy bool   `json:"retry_worthy"`
+	}{}
+
+	// Unmarshal the JSON into our temporary struct
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return fmt.Errorf("failed to unmarshal JobErrorReturn: %w", err)
+	}
+
+	// Set the fields on our actual struct
+	if temp.ErrorString != "" {
+		j.ErrorObj = errors.New(temp.ErrorString)
+	}
+	j.ErrorString = temp.ErrorString
+	j.RetryWorthy = temp.RetryWorthy
+
+	return nil
 }
 
 // SnerdTask is a retryable task that stores parameters instead of implementations
@@ -186,6 +232,18 @@ func (t *SnerdTask) UpdateRetryConfig(errorObj error) {
 	t.RetryCount++
 	t.RetryAfterTime = time.Now().Add(time.Duration(t.RetryAfterHours * float64(time.Hour)))
 	t.LastErrorObj = errorObj
+	
+	// Update LastJobError with the new error information
+	if errorObj != nil {
+		t.LastJobError = &JobErrorReturn{
+			ErrorObj:    errorObj,
+			ErrorString: errorObj.Error(),
+			RetryWorthy: true, // Assuming we want to retry if we're calling UpdateRetryConfig
+		}
+	} else {
+		t.LastJobError = nil
+	}
+	
 	t.UpdatedAt = time.Now()
 }
 
