@@ -196,25 +196,16 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	// Make sure the parent directory exists
-	dirPath := filepath.Dir(fs.filePath)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
-	}
-
 	// Try to open the file
 	f, err := os.Open(fs.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// No tasks file yet, return empty slice
-			fmt.Printf("Task file does not exist yet at %s, returning empty list\n", fs.filePath)
-			return []*RetryableTask{}, nil
+			return []*RetryableTask{}, nil // Return empty slice if file doesn't exist
 		}
-		return nil, fmt.Errorf("failed to open task file %s: %w", fs.filePath, err)
+		return nil, fmt.Errorf("open file: %w", err)
 	}
 	defer f.Close()
 
-	// Build map of latest tasks by ID
 	taskMap := make(map[string]*RetryableTask)
 	scanner := bufio.NewScanner(f)
 
@@ -225,58 +216,102 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 		}
 
 		t := &RetryableTask{} // Create a new instance for each task
-		if err := json.Unmarshal(line, t); err != nil {
+		if err := json.Unmarshal(line, &t); err != nil {
 			fmt.Printf("Error unmarshaling task: %v\n", err)
 			continue
 		}
 
-		// Skip deleted tasks
+		// Check if task is marked as deleted in the main struct
 		if t.DeletedAt != nil && !t.DeletedAt.IsZero() {
-			fmt.Printf("[ReadTasks] Skipping deleted task: %s (deletedAt=%v)\n", t.TaskID, t.DeletedAt)
-			delete(taskMap, t.TaskID)
 			continue
 		}
 
-		// Create a new instance to avoid pointer issues
-		taskCopy := *t
-		taskMap[t.TaskID] = &taskCopy
+		// Check for deletion markers in TaskData
+		if t.TaskData != "" {
+			var taskData map[string]interface{}
+			if err := json.Unmarshal([]byte(t.TaskData), &taskData); err == nil {
+				// Check all possible deletion markers
+				if deletedAt, ok := taskData["deletedAt"].(string); ok && deletedAt != "" {
+					continue
+				}
+				if deleted, ok := taskData["deleted"].(bool); ok && deleted {
+					continue
+				}
+				if status, ok := taskData["status"].(string); ok && status == "deleted" {
+					continue
+				}
+			}
+		}
+
+		// Also check if deleted in TaskData for backward compatibility
+		if t.TaskData != "" {
+			var taskData map[string]interface{}
+			if err := json.Unmarshal([]byte(t.TaskData), &taskData); err == nil {
+				if deletedAt, ok := taskData["deletedAt"].(string); ok && deletedAt != "" {
+					continue
+				}
+			}
+		}
+
+		// Keep only the latest version of each task
+		if existing, ok := taskMap[t.TaskID]; !ok || t.UpdatedAt.After(existing.UpdatedAt) {
+			taskMap[t.TaskID] = t
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan file: %w", err)
 	}
 
-	// Convert map to slice
-	tasks := make([]*RetryableTask, 0, len(taskMap))
+	// Convert map to slice and create copies to avoid pointer issues
+	result := make([]*RetryableTask, 0, len(taskMap))
 	for _, task := range taskMap {
-		tasks = append(tasks, task)
+		taskCopy := *task
+		result = append(result, &taskCopy)
 	}
 
-	return tasks, nil
+	return result, nil
 }
 
 // ReadDueTasks returns all tasks that are currently in the store that are due for execution
 // This filters out deleted tasks and returns only active tasks whose retry time has passed
 func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
-	// Get all active tasks first
 	tasks, err := fs.ReadTasks()
 	if err != nil {
 		return nil, fmt.Errorf("read tasks: %w", err)
 	}
 
-	// Filter tasks that are due for execution (their retry time has passed)
 	now := time.Now()
 	dueTasks := make([]*RetryableTask, 0, len(tasks))
 
 	for _, task := range tasks {
-		if task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now) {
-			dueTasks = append(dueTasks, task)
+		// Skip tasks that are not due yet
+		if task.RetryAfterTime.After(now) {
+			continue
 		}
+
+		// Double-check that task is not marked as deleted in TaskData
+		if task.TaskData != "" {
+			var taskData map[string]interface{}
+			if err := json.Unmarshal([]byte(task.TaskData), &taskData); err == nil {
+				// Check all possible deletion markers
+				if deletedAt, ok := taskData["deletedAt"].(string); ok && deletedAt != "" {
+					continue
+				}
+				if deleted, ok := taskData["deleted"].(bool); ok && deleted {
+					continue
+				}
+				if status, ok := taskData["status"].(string); ok && status == "deleted" {
+					continue
+				}
+			}
+		}
+
+		dueTasks = append(dueTasks, task)
 	}
 
 	if len(dueTasks) > 0 {
-		fmt.Printf("Found %d tasks due for execution out of %d total tasks\n",
-			len(dueTasks), len(tasks))
+		fmt.Printf("Found %d tasks due for execution (out of %d total tasks)\n", len(dueTasks), len(tasks))
 	}
 
 	return dueTasks, nil
@@ -421,6 +456,31 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	now := time.Now()
 	deletedTask.DeletedAt = &now
 
+	// Update the task data to include deletion info
+	if deletedTask.TaskData != "" {
+		var taskData map[string]interface{}
+		if err := json.Unmarshal([]byte(deletedTask.TaskData), &taskData); err == nil {
+			// Ensure all deletion markers are set
+			taskData["deletedAt"] = now.Format(time.RFC3339)
+			taskData["deleted"] = true
+			taskData["status"] = "deleted"
+			
+			// Update the last error if this was due to max retries
+			if taskData["retryCount"] != nil && taskData["maxRetries"] != nil {
+				retryCount, _ := taskData["retryCount"].(float64)
+				maxRetries, _ := taskData["maxRetries"].(float64)
+				if retryCount >= maxRetries {
+					taskData["lastError"] = fmt.Sprintf("Task reached max retries (%d/%d)", int(retryCount), int(maxRetries))
+					taskData["lastErrorTime"] = now.Format(time.RFC3339)
+				}
+			}
+
+			if updatedData, err := json.Marshal(taskData); err == nil {
+				deletedTask.TaskData = string(updatedData)
+			}
+		}
+	}
+
 	// Marshal to JSON
 	data, err := json.Marshal(&deletedTask)
 	if err != nil {
@@ -439,6 +499,11 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 		return fmt.Errorf("write to file: %w", err)
 	}
 
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync file: %w", err)
+	}
+
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
@@ -447,12 +512,17 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	fs.appendCount++
 	fs.deletedTasks++
 
+	// Log the deletion
+	fmt.Printf("Marked task %s as deleted at %s\n", taskID, now.Format(time.RFC3339))
+
 	// Check if compaction should be triggered
 	if fs.shouldCompact() {
-		fmt.Println("Compacting task log file...")
+		fmt.Println("Compacting task log file due to high deletion ratio...")
 		go func() {
 			if err := fs.Compact(); err != nil {
 				fmt.Printf("Error compacting file: %v\n", err)
+			} else {
+				fmt.Println("Successfully compacted task log file")
 			}
 		}()
 	}
