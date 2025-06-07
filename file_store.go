@@ -187,7 +187,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 		}()
 
 	}
-	fmt.Println("Done with compaction")
+
 	return nil
 
 }
@@ -212,23 +212,21 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 		}
 		return nil, fmt.Errorf("failed to open task file %s: %w", fs.filePath, err)
 	}
-
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			fmt.Printf("Error closing file %s: %v\n", fs.filePath, err)
-			return
-		}
-	}(f)
+	defer f.Close()
 
 	// Build map of latest tasks by ID
 	taskMap := make(map[string]*RetryableTask)
 	scanner := bufio.NewScanner(f)
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		var t RetryableTask
-		if err := json.Unmarshal(line, &t); err != nil {
-			fmt.Printf("unmarshal task: %v\n", err)
+		if len(line) == 0 {
+			continue // Skip empty lines
+		}
+
+		t := &RetryableTask{} // Create a new instance for each task
+		if err := json.Unmarshal(line, t); err != nil {
+			fmt.Printf("Error unmarshaling task: %v\n", err)
 			continue
 		}
 
@@ -239,8 +237,9 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 			continue
 		}
 
-		// Store the latest version of the task
-		taskMap[t.TaskID] = &t
+		// Create a new instance to avoid pointer issues
+		taskCopy := *t
+		taskMap[t.TaskID] = &taskCopy
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -286,54 +285,24 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {
 	log.Printf("[UpdateTaskRetryConfig] Called for taskId=%s\n", taskID)
 
-	// First, find the latest version of the task
+	// Get the latest version of the task using the helper method
 	fs.mu.Lock()
-	f, err := os.Open(fs.filePath)
+	latest, err := fs.getLatestTask(taskID)
 	if err != nil {
 		fs.mu.Unlock()
-		return fmt.Errorf("open file: %w", err)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %v\n", err)
+		return fmt.Errorf("get latest task: %w", err)
 	}
 
-	var latest *RetryableTask
-	scanner := bufio.NewScanner(f)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var t RetryableTask
-		if err := json.Unmarshal(line, &t); err != nil {
-			fmt.Printf("unmarshal task: %v\n", err)
-			continue
-		}
-
-		if t.TaskID == taskID {
-			latest = &t
-		}
-	}
-
-	// Close the file before releasing the mutex
-	if err := f.Close(); err != nil {
-		fs.mu.Unlock()
-		return fmt.Errorf("close file: %w", err)
-	}
-
-	if err := scanner.Err(); err != nil {
-		fs.mu.Unlock()
-		return fmt.Errorf("scan file: %w", err)
-	}
-
-	if latest == nil {
-		fs.mu.Unlock()
-		log.Printf("[UpdateTaskRetryConfig] ERROR: task with ID %s not found\n", taskID)
-		return fmt.Errorf("task with ID %s not found", taskID)
-	}
-
+	// Check if the task is deleted
 	if latest.DeletedAt != nil && !latest.DeletedAt.IsZero() {
 		fs.mu.Unlock()
-		log.Printf("[UpdateTaskRetryConfig] ERROR: cannot update a deleted task: %s\n", taskID)
-		return fmt.Errorf("cannot update a deleted task: %s", taskID)
+		errMsg := fmt.Sprintf("cannot update a deleted task: %s", taskID)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		return fmt.Errorf(errMsg)
 	}
 
-	// Create a copy of the task to avoid data races
+	// Create a deep copy of the task to avoid data races
 	updatedTask := *latest
 	fs.mu.Unlock() // Release the mutex before calling CreateTask
 
@@ -346,6 +315,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		// Create a JobErrorReturn for structured error data
 		updatedTask.LastJobError = &JobErrorReturn{
 			ErrorObj:    errorObj,
+			ErrorString: errorObj.Error(),
 			RetryWorthy: true, // Assuming it's retry-worthy since we're updating retry config
 		}
 
@@ -370,7 +340,6 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d\n",
 		updatedTask.TaskID, updatedTask.RetryCount)
 	return fs.CreateTask(&updatedTask)
-
 }
 
 // We use a soft deleting approach alongside compaction
@@ -401,15 +370,17 @@ func (fs *FileStore) getLatestTask(taskID string) (*RetryableTask, error) {
 			continue
 		}
 
-		var t RetryableTask
-		if err := json.Unmarshal([]byte(line), &t); err != nil {
+		t := &RetryableTask{} // Create a new instance for each task
+		if err := json.Unmarshal([]byte(line), t); err != nil {
 			fmt.Printf("unmarshal task: %v\n", err)
 			continue
 		}
 
 		// If this is the task we're looking for, update our latest reference
 		if t.TaskID == taskID {
-			latest = &t
+			// Create a new instance to avoid pointer issues
+			taskCopy := *t
+			latest = &taskCopy
 		}
 	}
 
@@ -445,54 +416,45 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 		return nil
 	}
 
-	// Mark the task as deleted while preserving all other data
+	// Create a new task with the same data but marked as deleted
+	deletedTask := *existingTask // Create a copy
 	now := time.Now()
-	existingTask.DeletedAt = &now
-	fmt.Printf("[DeleteTask] Set DeletedAt to: %v (isZero=%v)\n", existingTask.DeletedAt, existingTask.DeletedAt.IsZero())
+	deletedTask.DeletedAt = &now
 
 	// Marshal to JSON
-	data, err := json.Marshal(existingTask)
+	data, err := json.Marshal(&deletedTask)
 	if err != nil {
 		return fmt.Errorf("marshal task for deletion: %w", err)
 	}
-	fmt.Println("TASK TO BE DELETED: ", existingTask)
+
 	// Open the file for appending
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			fmt.Printf("Error closing file: %s\n", err)
-			return
-		}
-	}(f)
 
-	// Print the value of DeletedAt before marshaling
-	fmt.Printf("[DeleteTask] About to marshal task with DeletedAt=%v (isZero=%v)\n", existingTask.DeletedAt, existingTask.DeletedAt.IsZero())
-	// Print the JSON being written for debug
-	fmt.Printf("[DeleteTask] Writing deleted task to file: %s\n", string(data))
-	// Append the JSON entry followed by a newline
+	// Write the deleted task to the log
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		fmt.Println("Error writing to file:", err)
+		f.Close()
 		return fmt.Errorf("write to file: %w", err)
 	}
 
-	// Track stats
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close file: %w", err)
+	}
+
+	// Update stats
 	fs.appendCount++
-	fs.deletedTasks++ // This is a delete operation, so increment the deletedTasks counter
+	fs.deletedTasks++
 
 	// Check if compaction should be triggered
 	if fs.shouldCompact() {
-		fmt.Println("COMPACTING THE FILE!!!!")
+		fmt.Println("Compacting task log file...")
 		go func() {
-			err := fs.Compact()
-			if err != nil {
-				fmt.Printf("Error compacting file: %s\n", err)
+			if err := fs.Compact(); err != nil {
+				fmt.Printf("Error compacting file: %v\n", err)
 			}
 		}()
-
 	}
 
 	return nil
@@ -523,93 +485,100 @@ func (fs *FileStore) Compact() error {
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer func(tempFile *os.File) {
-		err := tempFile.Close()
-		if err != nil {
-			fmt.Printf("Error closing temp file during compaction: %v\n", err)
-			return
-		}
-	}(tempFile)
 
 	// Stats for logging
-	var deletedTaskCount int
+	var (
+		deletedTaskCount int
+		totalTasks       int
+	)
 
-	fmt.Println("Building latest state of each task")
 	// Build the latest state of each task
 	taskMap := make(map[string]*RetryableTask)
-	deleted := make(map[string]bool)
 
 	inputFile, err := os.Open(fs.filePath)
 	if err != nil {
+		tempFile.Close()
 		return fmt.Errorf("open file: %w", err)
 	}
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			fmt.Printf("Error closing file: %s\n", err)
-			return
-		}
-	}(inputFile)
 
 	scanner := bufio.NewScanner(inputFile)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		var t RetryableTask
-		if err := json.Unmarshal(line, &t); err != nil {
-			fmt.Printf("unmarshal task: %v\n", err)
+		if len(line) == 0 {
+			continue // Skip empty lines
+		}
+
+		totalTasks++
+		t := &RetryableTask{} // Create a new instance for each task
+		if err := json.Unmarshal(line, t); err != nil {
+			fmt.Printf("Error unmarshaling task during compaction: %v\n", err)
 			continue
 		}
 
 		// Track deleted tasks
 		if t.DeletedAt != nil && !t.DeletedAt.IsZero() {
-			deleted[t.TaskID] = true
 			deletedTaskCount++
 			continue
 		}
 
 		// Keep only the latest version of each task
 		if existing, ok := taskMap[t.TaskID]; !ok || t.UpdatedAt.After(existing.UpdatedAt) {
-			taskMap[t.TaskID] = &t
+			taskMap[t.TaskID] = t
 		}
 	}
 
+	// Close the input file
+	if err := inputFile.Close(); err != nil {
+		tempFile.Close()
+		return fmt.Errorf("close input file: %w", err)
+	}
+
 	if err := scanner.Err(); err != nil {
+		tempFile.Close()
 		return fmt.Errorf("scan file: %w", err)
 	}
-	fmt.Println("Scanned file")
-	// Already created temp file at the beginning, now we'll use it
-	fmt.Println("Writing to temp file:", tempFile.Name())
+
+	// Write compacted tasks to temp file
 	encoder := json.NewEncoder(tempFile)
 	for _, task := range taskMap {
+		// Skip any remaining deleted tasks (shouldn't happen due to earlier check)
 		if task.DeletedAt != nil && !task.DeletedAt.IsZero() {
-			// Skip soft-deleted tasks during compaction
 			continue
 		}
+
 		if err := encoder.Encode(task); err != nil {
-			err := tempFile.Close()
-			if err != nil {
-				return err
-			}
+			tempFile.Close()
 			return fmt.Errorf("encode task: %w", err)
 		}
 	}
 
-	// flush tempfile to disk
-	fmt.Println("Flushing tempfile to disk")
+	// Flush to disk
 	if err := tempFile.Sync(); err != nil {
-
-		return fmt.Errorf("sync tempfile: %w", err)
+		tempFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
 	}
 
-	// finally atomically replace old file
-	fmt.Println("Renaming tempfile to file")
+	// Close the temp file before renaming
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	// Atomically replace the old file with the new one
 	if err := os.Rename(tempFilePath, fs.filePath); err != nil {
-		return fmt.Errorf("rename tempfile: %w", err)
+		return fmt.Errorf("rename temp file: %w", err)
 	}
-	fmt.Println("Renamed tempfile to file")
+
+	// Update stats
+	fs.totalTasks = len(taskMap)
+	fs.deletedTasks = 0
+	fs.appendCount = 0
+
+	// Log completion
+	duration := time.Since(start)
+	fmt.Printf("Compaction completed in %v. Removed %d/%d tasks\n",
+		duration.Round(time.Millisecond), deletedTaskCount, totalTasks)
 
 	return nil
-
 }
 
 func (fs *FileStore) shouldCompact() bool {
