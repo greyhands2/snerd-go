@@ -232,6 +232,7 @@ func (t *SnerdTask) OnMaxRetryReached(contextProvider func() interface{}) error 
 // UpdateRetryConfig updates the retry configuration after a failed execution
 func (t *SnerdTask) UpdateRetryConfig(errorObj error) {
 	t.RetryCount++
+	t.UpdatedAt = time.Now() // Update the modification timestamp
 	
 	// Calculate backoff with exponential backoff and jitter
 	// Start with a base delay of 1 second, increasing with each retry

@@ -3,7 +3,6 @@ package snerd
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -276,9 +275,15 @@ func (q *AnyQueue) ProcessDueTasks() {
 			continue
 		}
 
-		// If this is the first execution, set the initial RetryAfterTime
+		// If this is the first execution, set the initial RetryAfterTime and persist it
 		if snerdTask.RetryAfterTime.IsZero() {
 			snerdTask.RetryAfterTime = time.Now()
+			// Persist the initial execution time
+			if q.fileStore != nil {
+				if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.TaskID, nil); updateErr != nil {
+					fmt.Printf("Error updating initial task time: %v\n", updateErr)
+				}
+			}
 		}
 
 		// Check if task type has a registered handler
@@ -304,82 +309,49 @@ func (q *AnyQueue) ProcessDueTasks() {
 			// Update retry configuration
 			snerdTask.UpdateRetryConfig(err)
 
-			// If we've exceeded max retries, mark as failed
-			if snerdTask.RetryCount >= snerdTask.MaxRetries {
-				fmt.Printf("Task %s failed after %d retries: %v\n", snerdTask.TaskID, snerdTask.MaxRetries, err)
-				// Mark task as failed in the file store
-				if q.fileStore != nil {
+			// Always update the task in the file store after a failure
+			if q.fileStore != nil {
+				// If we've reached max retries, mark as failed
+				if snerdTask.RetryCount >= snerdTask.MaxRetries {
+					fmt.Printf("Task %s failed after %d retries: %v\n", snerdTask.TaskID, snerdTask.MaxRetries, err)
+					// Mark task as failed in the file store
 					_ = q.fileStore.DeleteTask(snerdTask.TaskID)
-				}
-			} else {
-				// Calculate next retry time with exponential backoff
-				retryHours := snerdTask.RetryAfterHours
-				if retryHours <= 0 {
-					// Default to 1 minute if not specified
-					retryHours = 1.0 / 60.0
-				}
-
-				// Apply exponential backoff
-				backoffFactor := math.Pow(2, float64(snerdTask.RetryCount))
-				retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) * time.Second
-
-				// Log the retry information
-				fmt.Printf("Scheduling task %s for retry %d/%d after %v\n",
-					snerdTask.TaskID,
-					snerdTask.RetryCount+1,
-					snerdTask.MaxRetries,
-					retryDuration.Round(time.Second))
-
-				// Update the task for retry
-				if q.fileStore != nil {
+				} else {
+					// Update the task with new retry information
 					updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.TaskID, err)
 					if updateErr != nil {
 						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
-						fmt.Printf("Successfully updated task %s for retry %d/%d\n", 
-							snerdTask.TaskID, snerdTask.RetryCount+1, snerdTask.MaxRetries)
+						fmt.Printf("Updated task %s for retry (attempt %d/%d)\n", 
+							snerdTask.TaskID, snerdTask.RetryCount, snerdTask.MaxRetries)
 					}
-				} else {
-					fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.TaskID)
-				}
-			}
-			// Log the final error after max retries
-			fmt.Printf("Task %s failed after %d attempts: %v\n", snerdTask.TaskID, snerdTask.MaxRetries, err)
-
-			// Delete the task after it has reached max retries
-			if q.fileStore != nil {
-				deleteErr := q.fileStore.DeleteTask(snerdTask.TaskID)
-				if deleteErr != nil {
-					fmt.Printf("Error deleting task: %v\n", deleteErr)
-				} else {
-					fmt.Printf("Successfully deleted task %s after max retries\n", snerdTask.TaskID)
 				}
 			}
 		} else {
-			// Task executed successfully
-			fmt.Printf("Task %s executed successfully\n", snerdTask.GetTaskID())
-
-			// Delete the task after successful execution
+			// Task succeeded, delete it
+			fmt.Printf("Task %s completed successfully\n", snerdTask.TaskID)
 			if q.fileStore != nil {
-				// Ensure we soft-delete by using the proper method
-				deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
+				deleteErr := q.fileStore.DeleteTask(snerdTask.TaskID)
 				if deleteErr != nil {
-					fmt.Printf("Error deleting task %s: %v\n", snerdTask.GetTaskID(), deleteErr)
+					fmt.Printf("Error deleting task %s: %v\n", snerdTask.TaskID, deleteErr)
 				} else {
-					fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.GetTaskID())
-
-					// Record task completion statistics
-					duration := time.Since(snerdTask.CreatedAt)
-					fmt.Printf("Task %s completed in %v (type=%s)\n",
-						snerdTask.GetTaskID(),
-						duration.Round(time.Millisecond),
-						snerdTask.TaskType)
+					fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.TaskID)
 				}
 			}
+
+			// Record task completion statistics after successful execution
+			duration := time.Since(snerdTask.CreatedAt)
+			fmt.Printf("Task %s completed in %v (type=%s)\n",
+				snerdTask.TaskID,
+				duration.Round(time.Millisecond),
+				snerdTask.TaskType)
+
+			// Update dequeued counter
+			atomic.AddInt64(&q.totalDequeued, 1)
 		}
-		atomic.AddInt64(&q.totalDequeued, 1)
 	}
 }
+
 func (q *AnyQueue) Name() string {
 	q.mu.Lock()
 	defer q.mu.Unlock()

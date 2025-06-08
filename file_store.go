@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -286,11 +287,17 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	dueTasks := make([]*RetryableTask, 0, len(tasks))
 
 	for _, task := range tasks {
-		// If RetryAfterTime is zero, it means the task has never been executed
-		// and should be processed immediately. Otherwise, check if it's due.
-		if !task.RetryAfterTime.IsZero() && task.RetryAfterTime.After(now) {
-			fmt.Printf("Skipping task %s: not due yet (due at %v, now is %v)\n", task.TaskID, task.RetryAfterTime, now)
-			continue
+		// Check if task is due
+		if !task.RetryAfterTime.IsZero() {
+			if task.RetryAfterTime.After(now) {
+				fmt.Printf("Skipping task %s: not due yet (due at %v, now is %v)\n", task.TaskID, task.RetryAfterTime, now)
+				continue
+			}
+			// If we get here, task.RetryAfterTime is in the past, so it's due
+			fmt.Printf("Task %s is due (was due at %v, now is %v)\n", task.TaskID, task.RetryAfterTime, now)
+		} else {
+			// Zero time means task is new and should be processed immediately
+			fmt.Printf("Task %s is new (no retry time set), processing now\n", task.TaskID)
 		}
 
 		// Double-check that task is not marked as deleted in TaskData
@@ -321,38 +328,56 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 }
 
 func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error {
-	log.Printf("[UpdateTaskRetryConfig] Called for taskId=%s\n", taskID)
-
-	// Get the latest version of the task using the helper method
-	fs.mu.Lock()
-	latest, err := fs.getLatestTask(taskID)
-	if err != nil {
-		fs.mu.Unlock()
-		log.Printf("[UpdateTaskRetryConfig] ERROR: %v\n", err)
-		return fmt.Errorf("get latest task: %w", err)
-	}
-
-	// Check if the task is deleted
-	if latest.DeletedAt != nil && !latest.DeletedAt.IsZero() {
-		fs.mu.Unlock()
-		errMsg := fmt.Sprintf("cannot update a deleted task: %s", taskID)
+	if taskID == "" {
+		errMsg := "taskID cannot be empty"
 		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
 		return fmt.Errorf(errMsg)
 	}
 
-	// Create a deep copy of the task to avoid data races
+	log.Printf("[UpdateTaskRetryConfig] Starting update for taskId=%s\n", taskID)
+
+	// Get the latest version of the task using the helper method
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	log.Printf("[UpdateTaskRetryConfig] Acquired lock for taskId=%s\n", taskID)
+
+	latest, err := fs.getLatestTask(taskID)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to get latest task %s: %v", taskID, err)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		return fmt.Errorf("get latest task: %w", err)
+	}
+
+	if latest == nil {
+		errMsg := fmt.Sprintf("task %s not found", taskID)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		return fmt.Errorf(errMsg)
+	}
+
+	// Check if the task is deleted
+	if latest.DeletedAt != nil && !latest.DeletedAt.IsZero() {
+		errMsg := fmt.Sprintf("cannot update a deleted task: %s (deleted at %v)", taskID, latest.DeletedAt)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		return fmt.Errorf(errMsg)
+	}
+
+	log.Printf("[UpdateTaskRetryConfig] Processing taskId=%s, current retry count: %d\n",
+		taskID, latest.RetryCount)
+
+	// Create a copy of the task to update
 	updatedTask := *latest
-	fs.mu.Unlock() // Release the mutex before calling CreateTask
+	updatedTask.UpdatedAt = time.Now()
 
-	// Store error information if provided
+	// If this is a retry, update the retry count and schedule the next retry.
 	if errorObj != nil {
-		errMsg := errorObj.Error()
-		log.Printf("[UpdateTaskRetryConfig] Updating task %s with error: %s\n", taskID, errMsg)
+		log.Printf("[UpdateTaskRetryConfig] Handling error for taskId=%s: %v\n", taskID, errorObj)
 
-		// Create a JobErrorReturn for structured error data
+		// Increment retry count safely
+		updatedTask.RetryCount++
 		updatedTask.LastJobError = &JobErrorReturn{
 			ErrorObj:    errorObj,
-			ErrorString: errMsg,
+			ErrorString: errorObj.Error(),
 			RetryWorthy: true,
 		}
 
@@ -360,54 +385,81 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		var taskData map[string]interface{}
 		if updatedTask.TaskData != "" {
 			if err := json.Unmarshal([]byte(updatedTask.TaskData), &taskData); err != nil {
-				log.Printf("[UpdateTaskRetryConfig] Error unmarshaling TaskData: %v\n", err)
+				log.Printf("[UpdateTaskRetryConfig] WARN: Error unmarshaling TaskData: %v, creating new task data\n", err)
 				taskData = make(map[string]interface{})
 			}
 		} else {
 			taskData = make(map[string]interface{})
 		}
 
-		// Increment retry count
-		updatedTask.RetryCount++
-
-
 		// Update task data with error and retry information
-		taskData["lastError"] = errMsg
+		taskData["lastError"] = errorObj.Error()
 		taskData["lastErrorTime"] = time.Now().Format(time.RFC3339)
 		taskData["retryCount"] = updatedTask.RetryCount
 
-		// Calculate next retry time with exponential backoff
+		// Calculate next retry time with exponential backoff and jitter
 		retryHours := updatedTask.RetryAfterHours
 		if retryHours <= 0 {
 			retryHours = 0.5 // Default to 30 minutes if not specified
+			log.Printf("[UpdateTaskRetryConfig] Using default retry hours: %.2f\n", retryHours)
 		}
 
-		// Apply exponential backoff based on retry count
+		// Apply exponential backoff based on retry count with jitter
+		baseDelay := time.Duration(retryHours * float64(time.Hour))
 		backoffFactor := math.Pow(2, float64(updatedTask.RetryCount-1))
-		retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour
-		nextRetryTime := time.Now().Add(retryDuration)
+		delay := time.Duration(float64(baseDelay) * backoffFactor)
+
+		// Add jitter (±10%)
+		jitter := time.Duration(rand.Float64()*0.2*float64(delay)) - time.Duration(0.1*float64(delay))
+		delayWithJitter := delay + jitter
+
+		// Cap the delay at 24 hours
+		if delayWithJitter > 24*time.Hour {
+			delayWithJitter = 24 * time.Hour
+		}
+
+		nextRetryTime := time.Now().Add(delayWithJitter)
 
 		// Update task fields
 		updatedTask.RetryAfterTime = nextRetryTime
 		taskData["retryAfterTime"] = nextRetryTime.Format(time.RFC3339)
 
 		// Update the TaskData JSON
-		if updatedData, err := json.Marshal(taskData); err == nil {
-			updatedTask.TaskData = string(updatedData)
-			log.Printf("[UpdateTaskRetryConfig] Updated TaskData for task %s: %s\n",
-				taskID, updatedTask.TaskData)
-		} else {
-			log.Printf("[UpdateTaskRetryConfig] Error marshaling TaskData: %v\n", err)
+		updatedData, err := json.Marshal(taskData)
+		if err != nil {
+			log.Printf("[UpdateTaskRetryConfig] ERROR marshaling TaskData: %v\n", err)
+			return fmt.Errorf("marshal task data: %w", err)
 		}
+		updatedTask.TaskData = string(updatedData)
 
-		log.Printf("[UpdateTaskRetryConfig] Task %s will retry at %s (attempt %d/%d)\n",
+		log.Printf("[UpdateTaskRetryConfig] Task %s will retry at %s (attempt %d/%d, delay: %v)\n",
 			taskID, nextRetryTime.Format(time.RFC3339),
-			updatedTask.RetryCount, updatedTask.MaxRetries)
+			updatedTask.RetryCount, updatedTask.MaxRetries, delayWithJitter)
+	} else {
+		log.Printf("[UpdateTaskRetryConfig] No error provided, updating task %s without retry\n", taskID)
 	}
 
-	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for taskId=%s retryCount=%d\n",
+	// First, mark the old task as deleted by calling DeleteTask
+	log.Printf("[UpdateTaskRetryConfig] Marking old task %s as deleted\n", taskID)
+	if err := fs.DeleteTask(taskID); err != nil {
+		errMsg := fmt.Sprintf("failed to mark old task as deleted: %v", err)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		return fmt.Errorf("mark old task as deleted: %w", err)
+	}
+
+	log.Printf("[UpdateTaskRetryConfig] Creating new version of taskId=%s retryCount=%d\n",
 		updatedTask.TaskID, updatedTask.RetryCount)
-	return fs.CreateTask(&updatedTask)
+
+	// Then create the updated task
+	if err := fs.CreateTask(&updatedTask); err != nil {
+		errMsg := fmt.Sprintf("failed to create updated task: %v", err)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		return fmt.Errorf("create updated task: %w", err)
+	}
+
+	log.Printf("[UpdateTaskRetryConfig] Successfully updated task %s (new retry count: %d)\n",
+		taskID, updatedTask.RetryCount)
+	return nil
 }
 
 // We use a soft deleting approach alongside compaction
