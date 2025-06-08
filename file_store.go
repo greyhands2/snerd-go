@@ -352,15 +352,18 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 	latest.UpdatedAt = now
 
 	// Persist the deletion of the old task
+	log.Printf("[UpdateTaskRetryConfig] About to persist deleted old task: taskId=%s retryCount=%d deletedAt=%v\n", latest.TaskID, latest.RetryCount, latest.DeletedAt)
 	if err := fs.CreateTask(latest); err != nil {
 		log.Printf("[UpdateTaskRetryConfig] ERROR persisting deleted old task: %v\n", err)
 		return fmt.Errorf("persist deleted old task: %w", err)
 	}
+	log.Printf("[UpdateTaskRetryConfig] Persisted deleted old task: taskId=%s retryCount=%d deletedAt=%v\n", latest.TaskID, latest.RetryCount, latest.DeletedAt)
 
 	// Create a copy of the task to update
 	updatedTask := *latest
 	updatedTask.UpdatedAt = now
 	updatedTask.DeletedAt = nil // Clear DeletedAt for the new version
+	log.Printf("[UpdateTaskRetryConfig] About to append retry copy: taskId=%s retryCount=%d deletedAt=%v\n", updatedTask.TaskID, updatedTask.RetryCount, updatedTask.DeletedAt)
 
 	// If this is a retry, update the retry count and schedule the next retry
 	if errorObj != nil {
@@ -416,9 +419,15 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 			updatedTask.RetryCount, updatedTask.MaxRetries)
 	}
 
-	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for taskId=%s retryCount=%d\n",
-		updatedTask.TaskID, updatedTask.RetryCount)
-	return fs.CreateTask(&updatedTask)
+	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for taskId=%s retryCount=%d deletedAt=%v\n",
+		updatedTask.TaskID, updatedTask.RetryCount, updatedTask.DeletedAt)
+	errCreate := fs.CreateTask(&updatedTask)
+	if errCreate != nil {
+		log.Printf("[UpdateTaskRetryConfig] ERROR appending retry copy: %v\n", errCreate)
+	} else {
+		log.Printf("[UpdateTaskRetryConfig] Successfully appended retry copy: taskId=%s retryCount=%d deletedAt=%v\n", updatedTask.TaskID, updatedTask.RetryCount, updatedTask.DeletedAt)
+	}
+	return errCreate
 }
 
 // We use a soft deleting approach alongside compaction
