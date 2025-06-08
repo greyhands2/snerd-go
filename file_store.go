@@ -439,22 +439,23 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		log.Printf("[UpdateTaskRetryConfig] No error provided, updating task %s without retry\n", taskID)
 	}
 
-	// First, mark the old task as deleted by calling DeleteTask
-	log.Printf("[UpdateTaskRetryConfig] Marking old task %s as deleted\n", taskID)
-	if err := fs.DeleteTask(taskID); err != nil {
-		errMsg := fmt.Sprintf("failed to mark old task as deleted: %v", err)
-		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
-		return fmt.Errorf("mark old task as deleted: %w", err)
-	}
-
+	// First, create the new version of the task
 	log.Printf("[UpdateTaskRetryConfig] Creating new version of taskId=%s retryCount=%d\n",
 		updatedTask.TaskID, updatedTask.RetryCount)
 
-	// Then create the updated task
+	// Create the new task version first
 	if err := fs.CreateTask(&updatedTask); err != nil {
 		errMsg := fmt.Sprintf("failed to create updated task: %v", err)
 		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
 		return fmt.Errorf("create updated task: %w", err)
+	}
+
+	// Then mark the old task as deleted
+	log.Printf("[UpdateTaskRetryConfig] Marking old task %s as deleted\n", taskID)
+	if err := fs.DeleteTask(taskID); err != nil {
+		errMsg := fmt.Sprintf("failed to mark old task as deleted: %v", err)
+		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
+		// We don't return here since we already created the new version
 	}
 
 	log.Printf("[UpdateTaskRetryConfig] Successfully updated task %s (new retry count: %d)\n",
