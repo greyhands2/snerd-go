@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -143,20 +142,19 @@ func NewSnerdTask(
 		return nil, fmt.Errorf("failed to serialize parameters: %w", err)
 	}
 
-	// For new tasks, we don't set RetryAfterTime here - it will be set when the task is executed
-	task := &SnerdTask{
+	// For new tasks, set RetryAfterTime to now (immediately due)
+	// Only tasks being retried will have RetryAfterTime set to the future
+	return &SnerdTask{
 		TaskID:          taskID,
 		TaskType:        taskType,
 		Parameters:      string(paramJSON),
 		RetryCount:      0,
 		MaxRetries:      maxRetries,
 		RetryAfterHours: retryAfterHours,
-		// Don't set RetryAfterTime here - it will be set when the task is executed
+		RetryAfterTime:  time.Now(), // Make new tasks immediately due
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
-	}
-
-	return task, nil
+	}, nil
 }
 
 // GetTaskID returns the task ID
@@ -232,38 +230,15 @@ func (t *SnerdTask) OnMaxRetryReached(contextProvider func() interface{}) error 
 // UpdateRetryConfig updates the retry configuration after a failed execution
 func (t *SnerdTask) UpdateRetryConfig(errorObj error) {
 	t.RetryCount++
-	t.UpdatedAt = time.Now() // Update the modification timestamp
-	
-	// Calculate backoff with exponential backoff and jitter
-	// Start with a base delay of 1 second, increasing with each retry
-	baseDelay := time.Second
-	maxDelay := time.Hour
-	
-	// Calculate the delay with exponential backoff (1s, 2s, 4s, 8s, 16s, etc.)
-	delay := baseDelay * time.Duration(1<<(t.RetryCount-1))
-	
-	// Add some jitter (up to 25% of the delay) to prevent thundering herd
-	jitter := time.Duration(rand.Int63n(int64(delay) / 4))
-	delay += jitter
-	
-	// Cap the delay at maxDelay
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-	
-	t.RetryAfterTime = time.Now().Add(delay)
+	t.RetryAfterTime = time.Now().Add(time.Duration(t.RetryAfterHours * float64(time.Hour)))
 	t.LastErrorObj = errorObj
-	
-	// Log the retry information
-	fmt.Printf("Task %s failed (attempt %d/%d), will retry at %s (in %v)\n", 
-		t.TaskID, t.RetryCount, t.MaxRetries, t.RetryAfterTime.Format(time.RFC3339), delay)
 	
 	// Update LastJobError with the new error information
 	if errorObj != nil {
 		t.LastJobError = &JobErrorReturn{
 			ErrorObj:    errorObj,
 			ErrorString: errorObj.Error(),
-			RetryWorthy: t.RetryCount < t.MaxRetries,
+			RetryWorthy: true, // Assuming we want to retry if we're calling UpdateRetryConfig
 		}
 	} else {
 		t.LastJobError = nil

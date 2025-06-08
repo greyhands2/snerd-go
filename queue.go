@@ -3,11 +3,11 @@ package snerd
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -228,7 +228,7 @@ func (q *AnyQueue) processTask(task Task) {
 	}
 }
 
-// ProcessDueTasks processes all tasks that are due for execution
+// ProcessDueTasks processes all tasks that are due for execution (retry time has passed)..
 func (q *AnyQueue) ProcessDueTasks() {
 	// Step 1: Load all tasks from the FileStore
 	if q.fileStore == nil {
@@ -236,8 +236,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 		return
 	}
 
-	now := time.Now()
-	fmt.Printf("[%s] Processing due tasks...\n", now.Format(time.RFC3339Nano))
+	fmt.Println("Processing due tasks...")
 	tasks, err := q.fileStore.ReadDueTasks()
 	if err != nil {
 		fmt.Printf("Error reading tasks: %v\n", err)
@@ -246,23 +245,11 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 	// No need to filter here, ReadDueTasks already returns only due tasks
 	if len(tasks) == 0 {
-		fmt.Printf("[%s] No due tasks found at %s\n", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		fmt.Println("No due tasks found")
 		return
 	}
 
-	fmt.Printf("[%s] Found %d due tasks (current time: %s)\n", now.Format(time.RFC3339Nano), len(tasks), now.Format(time.RFC3339Nano))
-	
-	// Sort tasks by RetryAfterTime (earliest first) to ensure fairness
-	sort.Slice(tasks, func(i, j int) bool {
-		// If either time is zero, prioritize it
-		if tasks[i].RetryAfterTime.IsZero() {
-			return true
-		}
-		if tasks[j].RetryAfterTime.IsZero() {
-			return false
-		}
-		return tasks[i].RetryAfterTime.Before(tasks[j].RetryAfterTime)
-	})
+	fmt.Printf("Found %d due tasks\n", len(tasks))
 
 	// Step 2: Process each due task
 	for _, t := range tasks {
@@ -275,83 +262,122 @@ func (q *AnyQueue) ProcessDueTasks() {
 			continue
 		}
 
-		// If this is the first execution, set the initial RetryAfterTime and persist it
-		if snerdTask.RetryAfterTime.IsZero() {
-			snerdTask.RetryAfterTime = time.Now()
-			// Persist the initial execution time
-			if q.fileStore != nil {
-				if updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.TaskID, nil); updateErr != nil {
-					fmt.Printf("Error updating initial task time: %v\n", updateErr)
-				}
-			}
-		}
+		// Log task execution for debugging
+		fmt.Printf("Executing task %s (type=%s)\n", snerdTask.GetTaskID(), snerdTask.TaskType)
 
-		// Check if task type has a registered handler
+		// Get the task handler from the registry
 		handlersMutex.RLock()
 		handler, exists := taskHandlers[snerdTask.TaskType]
 		handlersMutex.RUnlock()
 
-		if !exists {
+		if !exists || handler == nil {
 			fmt.Printf("No handler registered for task type: %s\n", snerdTask.TaskType)
 			continue
 		}
 
-		// Log task execution
-		fmt.Printf("Executing task %s (type: %s, attempt %d/%d)\n", 
-			snerdTask.TaskID, snerdTask.TaskType, snerdTask.RetryCount+1, snerdTask.MaxRetries+1)
-
-		// Execute the task
+		// Execute the handler with the task parameters
+		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
 		err := handler(snerdTask.Parameters)
-		if err != nil {
-			// Log the error
-			fmt.Printf("Task %s failed: %v\n", snerdTask.TaskID, err)
-			
-			// Update retry configuration
-			snerdTask.UpdateRetryConfig(err)
 
-			// Always update the task in the file store after a failure
-			if q.fileStore != nil {
-				// If we've reached max retries, mark as failed
-				if snerdTask.RetryCount >= snerdTask.MaxRetries {
-					fmt.Printf("Task %s failed after %d retries: %v\n", snerdTask.TaskID, snerdTask.MaxRetries, err)
-					// Mark task as failed in the file store
-					_ = q.fileStore.DeleteTask(snerdTask.TaskID)
-				} else {
-					// Update the task with new retry information
-					updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.TaskID, err)
+		if err != nil {
+			fmt.Println("Error executing the TASK!!!!")
+			// Task failed execution
+			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
+
+
+			// Get current retry count (don't increment yet - let UpdateTaskRetryConfig handle it)
+			currentRetry := snerdTask.RetryCount
+
+			// Handle retry logic if the task has failed
+			if currentRetry < snerdTask.MaxRetries {
+				fmt.Printf("RETRYING THE TASK! (Attempt %d/%d)\n", currentRetry+1, snerdTask.MaxRetries)
+
+				// Update task in file store with retry information
+				if q.fileStore != nil {
+					// We'll let UpdateTaskRetryConfig handle the retry count increment
+
+					// Calculate next retry time with exponential backoff
+					retryHours := snerdTask.RetryAfterHours
+					if retryHours <= 0 {
+						// Default to 30 minutes if not specified
+						retryHours = 0.5
+					}
+
+					// Apply exponential backoff: 30s, 1m, 2m, 4m, 8m, etc.
+					backoffFactor := math.Pow(2, float64(currentRetry))
+					retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour
+
+					// Log the retry information
+					fmt.Printf("Scheduling task %s for retry %d/%d after %v\n",
+						snerdTask.GetTaskID(),
+						currentRetry+1,
+						snerdTask.MaxRetries,
+						retryDuration.Round(time.Second))
+
+					// Update the task for retry - this will increment the retry count
+					updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err)
 					if updateErr != nil {
 						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
-						fmt.Printf("Updated task %s for retry (attempt %d/%d)\n", 
-							snerdTask.TaskID, snerdTask.RetryCount, snerdTask.MaxRetries)
+						fmt.Printf("Successfully updated task %s for retry %d/%d\n", 
+							snerdTask.GetTaskID(), currentRetry+1, snerdTask.MaxRetries)
+					}
+				} else {
+					fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
+				}
+			} else {
+				// Max retries reached - execute the task's OnMaxRetryReached method if implemented
+				fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
+				
+				// Log the final error with the actual retry count (which is MaxRetries since we start at 0)
+				fmt.Printf("Final error for task %s (attempts: %d): %v\n", 
+					snerdTask.GetTaskID(), snerdTask.RetryCount+1, err)
+				
+				// Create a context provider function that returns the error
+				contextProvider := func() interface{} {
+					return fmt.Errorf("task failed after %d attempts: %v", snerdTask.RetryCount+1, err)
+				}
+				
+				// Pass the context provider to OnMaxRetryReached
+				if callbackErr := snerdTask.OnMaxRetryReached(contextProvider); callbackErr != nil {
+					fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
+				}
+
+				// Delete the task after it has reached max retries
+				if q.fileStore != nil {
+					deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
+					if deleteErr != nil {
+						fmt.Printf("Error deleting task: %v\n", deleteErr)
+					} else {
+						fmt.Printf("Successfully deleted task %s after max retries\n", snerdTask.GetTaskID())
 					}
 				}
 			}
 		} else {
-			// Task succeeded, delete it
-			fmt.Printf("Task %s completed successfully\n", snerdTask.TaskID)
+			// Task executed successfully
+			fmt.Printf("Task %s executed successfully\n", snerdTask.GetTaskID())
+
+			// Delete the task after successful execution
 			if q.fileStore != nil {
-				deleteErr := q.fileStore.DeleteTask(snerdTask.TaskID)
+				// Ensure we soft-delete by using the proper method
+				deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
 				if deleteErr != nil {
-					fmt.Printf("Error deleting task %s: %v\n", snerdTask.TaskID, deleteErr)
+					fmt.Printf("Error deleting task %s: %v\n", snerdTask.GetTaskID(), deleteErr)
 				} else {
-					fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.TaskID)
+					fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.GetTaskID())
+
+					// Record task completion statistics
+					duration := time.Since(snerdTask.CreatedAt)
+					fmt.Printf("Task %s completed in %v (type=%s)\n",
+						snerdTask.GetTaskID(),
+						duration.Round(time.Millisecond),
+						snerdTask.TaskType)
 				}
 			}
-
-			// Record task completion statistics after successful execution
-			duration := time.Since(snerdTask.CreatedAt)
-			fmt.Printf("Task %s completed in %v (type=%s)\n",
-				snerdTask.TaskID,
-				duration.Round(time.Millisecond),
-				snerdTask.TaskType)
-
-			// Update dequeued counter
-			atomic.AddInt64(&q.totalDequeued, 1)
 		}
+		atomic.AddInt64(&q.totalDequeued, 1)
 	}
 }
-
 func (q *AnyQueue) Name() string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
