@@ -354,7 +354,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 			RetryWorthy: true,
 		}
 
-		// Parse TaskData to update error info
+		// Parse TaskData to update error info - preserve all existing data
 		var taskData map[string]interface{}
 		if updatedTask.TaskData != "" {
 			if err := json.Unmarshal([]byte(updatedTask.TaskData), &taskData); err != nil {
@@ -365,8 +365,9 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 			taskData = make(map[string]interface{})
 		}
 
-		// Increment retry count before calculating next retry time
+		// Increment retry count
 		updatedTask.RetryCount++
+
 
 		// Update task data with error and retry information
 		taskData["lastError"] = errMsg
@@ -381,7 +382,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 
 		// Apply exponential backoff based on retry count
 		backoffFactor := math.Pow(2, float64(updatedTask.RetryCount-1))
-		retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour // TODO this needs  ore comments
+		retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour
 		nextRetryTime := time.Now().Add(retryDuration)
 
 		// Update task fields

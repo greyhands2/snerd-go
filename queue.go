@@ -278,23 +278,23 @@ func (q *AnyQueue) ProcessDueTasks() {
 		// Execute the handler with the task parameters
 		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
 		err := handler(snerdTask.Parameters)
+
 		if err != nil {
 			fmt.Println("Error executing the TASK!!!!")
 			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
-			// Increment retry count for this attempt
-			currentRetry := snerdTask.RetryCount + 1
+
+			// Get current retry count (don't increment yet - let UpdateTaskRetryConfig handle it)
+			currentRetry := snerdTask.RetryCount
 
 			// Handle retry logic if the task has failed
-			if currentRetry <= snerdTask.MaxRetries {
-				fmt.Printf("RETRYING THE TASK! (Attempt %d/%d)\n", currentRetry, snerdTask.MaxRetries)
+			if currentRetry < snerdTask.MaxRetries {
+				fmt.Printf("RETRYING THE TASK! (Attempt %d/%d)\n", currentRetry+1, snerdTask.MaxRetries)
 
 				// Update task in file store with retry information
 				if q.fileStore != nil {
-					// Create a copy of the task with updated retry count
-					retryTask := *snerdTask
-					retryTask.RetryCount = currentRetry
+					// We'll let UpdateTaskRetryConfig handle the retry count increment
 
 					// Calculate next retry time with exponential backoff
 					retryHours := snerdTask.RetryAfterHours
@@ -302,28 +302,25 @@ func (q *AnyQueue) ProcessDueTasks() {
 						// Default to 30 minutes if not specified
 						retryHours = 0.5
 					}
+
 					// Apply exponential backoff: 30s, 1m, 2m, 4m, 8m, etc.
-					backoffFactor := math.Pow(2, float64(currentRetry-1))
+					backoffFactor := math.Pow(2, float64(currentRetry))
 					retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour
 
-					// Set the retry time
-					retryTask.RetryAfterTime = time.Now().Add(retryDuration)
-
 					// Log the retry information
-					fmt.Printf("Scheduling task %s for retry %d/%d after %v (at %s)\n",
+					fmt.Printf("Scheduling task %s for retry %d/%d after %v\n",
 						snerdTask.GetTaskID(),
-						currentRetry,
+						currentRetry+1,
 						snerdTask.MaxRetries,
-						retryDuration,
-						retryTask.RetryAfterTime.Format(time.RFC3339))
+						retryDuration.Round(time.Second))
 
-					// Update the task for retry
-					updateErr := q.fileStore.UpdateTaskRetryConfig(retryTask.GetTaskID(), err)
+					// Update the task for retry - this will increment the retry count
+					updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err)
 					if updateErr != nil {
 						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
 						fmt.Printf("Successfully updated task %s for retry %d/%d\n", 
-							snerdTask.GetTaskID(), currentRetry, snerdTask.MaxRetries)
+							snerdTask.GetTaskID(), currentRetry+1, snerdTask.MaxRetries)
 					}
 				} else {
 					fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
@@ -332,12 +329,13 @@ func (q *AnyQueue) ProcessDueTasks() {
 				// Max retries reached - execute the task's OnMaxRetryReached method if implemented
 				fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
 				
-				// Log the final error
-				fmt.Printf("Final error for task %s: %v\n", snerdTask.GetTaskID(), err)
+				// Log the final error with the actual retry count (which is MaxRetries since we start at 0)
+				fmt.Printf("Final error for task %s (attempts: %d): %v\n", 
+					snerdTask.GetTaskID(), snerdTask.RetryCount+1, err)
 				
 				// Create a context provider function that returns the error
 				contextProvider := func() interface{} {
-					return fmt.Errorf("task failed after %d attempts: %v", snerdTask.MaxRetries, err)
+					return fmt.Errorf("task failed after %d attempts: %v", snerdTask.RetryCount+1, err)
 				}
 				
 				// Pass the context provider to OnMaxRetryReached
@@ -361,7 +359,6 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 			// Delete the task after successful execution
 			if q.fileStore != nil {
-				fmt.Println("CALLING QUEUE FILESTORE FOR DELETING THE TASK AFTER SUCCESSFULT TASK!!!!")
 				// Ensure we soft-delete by using the proper method
 				deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
 				if deleteErr != nil {
