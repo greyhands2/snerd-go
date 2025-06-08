@@ -236,7 +236,8 @@ func (q *AnyQueue) ProcessDueTasks() {
 		return
 	}
 
-	fmt.Println("Processing due tasks...")
+	now := time.Now()
+	fmt.Printf("[%s] Processing due tasks...\n", now.Format(time.RFC3339Nano))
 	tasks, err := q.fileStore.ReadDueTasks()
 	if err != nil {
 		fmt.Printf("Error reading tasks: %v\n", err)
@@ -245,11 +246,11 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 	// No need to filter here, ReadDueTasks already returns only due tasks
 	if len(tasks) == 0 {
-		fmt.Println("No due tasks found")
+		fmt.Printf("[%s] No due tasks found at %s\n", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		return
 	}
 
-	fmt.Printf("Found %d due tasks\n", len(tasks))
+	fmt.Printf("[%s] Found %d due tasks (current time: %s)\n", now.Format(time.RFC3339Nano), len(tasks), now.Format(time.RFC3339Nano))
 
 	// Step 2: Process each due task
 	for _, t := range tasks {

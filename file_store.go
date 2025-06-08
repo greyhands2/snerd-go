@@ -286,8 +286,9 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	dueTasks := make([]*RetryableTask, 0, len(tasks))
 
 	for _, task := range tasks {
-		// Skip tasks that are not due yet
+		// Skip tasks that are not due yet (including tasks due at the exact same time)
 		if task.RetryAfterTime.After(now) {
+			fmt.Printf("Skipping task %s: not due yet (due at %v, now is %v)\n", task.TaskID, task.RetryAfterTime, now)
 			continue
 		}
 
