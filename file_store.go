@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,38 +342,67 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 	updatedTask := *latest
 	fs.mu.Unlock() // Release the mutex before calling CreateTask
 
-	// Update the task
-	updatedTask.RetryCount = updatedTask.RetryCount + 1
-	updatedTask.RetryAfterTime = time.Now().Add(time.Duration(updatedTask.RetryAfterHours) * time.Hour)
-
 	// Store error information if provided
 	if errorObj != nil {
+		errMsg := errorObj.Error()
+		log.Printf("[UpdateTaskRetryConfig] Updating task %s with error: %s\n", taskID, errMsg)
+
 		// Create a JobErrorReturn for structured error data
 		updatedTask.LastJobError = &JobErrorReturn{
 			ErrorObj:    errorObj,
-			ErrorString: errorObj.Error(),
-			RetryWorthy: true, // Assuming it's retry-worthy since we're updating retry config
+			ErrorString: errMsg,
+			RetryWorthy: true,
 		}
 
-		// Store error message as a string in TaskData for easier debugging
+		// Parse TaskData to update error info
+		var taskData map[string]interface{}
 		if updatedTask.TaskData != "" {
-			var data map[string]interface{}
-			if err := json.Unmarshal([]byte(updatedTask.TaskData), &data); err == nil {
-				// Add error information
-				data["lastError"] = errorObj.Error()
-				data["lastErrorTime"] = time.Now().Format(time.RFC3339)
-				data["retryCount"] = updatedTask.RetryCount
-				data["retryAfterTime"] = updatedTask.RetryAfterTime.Format(time.RFC3339)
-
-				// Re-serialize
-				if updatedData, err := json.Marshal(data); err == nil {
-					updatedTask.TaskData = string(updatedData)
-				}
+			if err := json.Unmarshal([]byte(updatedTask.TaskData), &taskData); err != nil {
+				log.Printf("[UpdateTaskRetryConfig] Error unmarshaling TaskData: %v\n", err)
+				taskData = make(map[string]interface{})
 			}
+		} else {
+			taskData = make(map[string]interface{})
 		}
+
+		// Increment retry count before calculating next retry time
+		updatedTask.RetryCount++
+
+		// Update task data with error and retry information
+		taskData["lastError"] = errMsg
+		taskData["lastErrorTime"] = time.Now().Format(time.RFC3339)
+		taskData["retryCount"] = updatedTask.RetryCount
+
+		// Calculate next retry time with exponential backoff
+		retryHours := updatedTask.RetryAfterHours
+		if retryHours <= 0 {
+			retryHours = 0.5 // Default to 30 minutes if not specified
+		}
+
+		// Apply exponential backoff based on retry count
+		backoffFactor := math.Pow(2, float64(updatedTask.RetryCount-1))
+		retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour // TODO this needs  ore comments
+		nextRetryTime := time.Now().Add(retryDuration)
+
+		// Update task fields
+		updatedTask.RetryAfterTime = nextRetryTime
+		taskData["retryAfterTime"] = nextRetryTime.Format(time.RFC3339)
+
+		// Update the TaskData JSON
+		if updatedData, err := json.Marshal(taskData); err == nil {
+			updatedTask.TaskData = string(updatedData)
+			log.Printf("[UpdateTaskRetryConfig] Updated TaskData for task %s: %s\n",
+				taskID, updatedTask.TaskData)
+		} else {
+			log.Printf("[UpdateTaskRetryConfig] Error marshaling TaskData: %v\n", err)
+		}
+
+		log.Printf("[UpdateTaskRetryConfig] Task %s will retry at %s (attempt %d/%d)\n",
+			taskID, nextRetryTime.Format(time.RFC3339),
+			updatedTask.RetryCount, updatedTask.MaxRetries)
 	}
 
-	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for retried taskId=%s retryCount=%d\n",
+	log.Printf("[UpdateTaskRetryConfig] About to call CreateTask for taskId=%s retryCount=%d\n",
 		updatedTask.TaskID, updatedTask.RetryCount)
 	return fs.CreateTask(&updatedTask)
 }
@@ -464,7 +494,7 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 			taskData["deletedAt"] = now.Format(time.RFC3339)
 			taskData["deleted"] = true
 			taskData["status"] = "deleted"
-			
+
 			// Update the last error if this was due to max retries
 			if taskData["retryCount"] != nil && taskData["maxRetries"] != nil {
 				retryCount, _ := taskData["retryCount"].(float64)

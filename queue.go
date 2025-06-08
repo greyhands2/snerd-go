@@ -3,6 +3,7 @@ package snerd
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -282,41 +283,47 @@ func (q *AnyQueue) ProcessDueTasks() {
 			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
+			// Increment retry count for this attempt
+			currentRetry := snerdTask.RetryCount + 1
+
 			// Handle retry logic if the task has failed
-			if snerdTask.RetryCount < snerdTask.MaxRetries {
-				fmt.Println("RETRYING THE TASK!!!!")
-				// Calculate next retry time
-				snerdTask.RetryCount++
+			if currentRetry <= snerdTask.MaxRetries {
+				fmt.Printf("RETRYING THE TASK! (Attempt %d/%d)\n", currentRetry, snerdTask.MaxRetries)
 
 				// Update task in file store with retry information
 				if q.fileStore != nil {
-					fmt.Println("CALLING QUEUE FILESTORE FOR RETRYING THE TASK!!!!")
-					// Convert to RetryableTask using the method on SnerdTask
-					retryableTask := snerdTask.ToRetryableTask()
+					// Create a copy of the task with updated retry count
+					retryTask := *snerdTask
+					retryTask.RetryCount = currentRetry
 
-					// Ensure we calculate retry time properly
+					// Calculate next retry time with exponential backoff
 					retryHours := snerdTask.RetryAfterHours
 					if retryHours <= 0 {
 						// Default to 30 minutes if not specified
 						retryHours = 0.5
 					}
-					retryDuration := time.Duration(retryHours * float64(time.Hour))
-					retryableTask.RetryAfterTime = time.Now().Add(retryDuration)
+					// Apply exponential backoff: 30s, 1m, 2m, 4m, 8m, etc.
+					backoffFactor := math.Pow(2, float64(currentRetry-1))
+					retryDuration := time.Duration(retryHours*backoffFactor*float64(time.Hour)) / time.Hour
+
+					// Set the retry time
+					retryTask.RetryAfterTime = time.Now().Add(retryDuration)
 
 					// Log the retry information
-					fmt.Printf("Scheduling task %s for retry %d/%d after %s (at %s)\n",
+					fmt.Printf("Scheduling task %s for retry %d/%d after %v (at %s)\n",
 						snerdTask.GetTaskID(),
-						snerdTask.RetryCount,
+						currentRetry,
 						snerdTask.MaxRetries,
 						retryDuration,
-						retryableTask.RetryAfterTime.Format(time.RFC3339))
+						retryTask.RetryAfterTime.Format(time.RFC3339))
 
 					// Update the task for retry
-					updateErr := q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), err)
+					updateErr := q.fileStore.UpdateTaskRetryConfig(retryTask.GetTaskID(), err)
 					if updateErr != nil {
 						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
-						fmt.Printf("Successfully updated task %s for retry\n", snerdTask.GetTaskID())
+						fmt.Printf("Successfully updated task %s for retry %d/%d\n", 
+							snerdTask.GetTaskID(), currentRetry, snerdTask.MaxRetries)
 					}
 				} else {
 					fmt.Printf("Warning: Cannot update task %s - no file store available\n", snerdTask.GetTaskID())
@@ -324,10 +331,15 @@ func (q *AnyQueue) ProcessDueTasks() {
 			} else {
 				// Max retries reached - execute the task's OnMaxRetryReached method if implemented
 				fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
+				
+				// Log the final error
+				fmt.Printf("Final error for task %s: %v\n", snerdTask.GetTaskID(), err)
+				
 				// Create a context provider function that returns the error
 				contextProvider := func() interface{} {
-					return err
+					return fmt.Errorf("task failed after %d attempts: %v", snerdTask.MaxRetries, err)
 				}
+				
 				// Pass the context provider to OnMaxRetryReached
 				if callbackErr := snerdTask.OnMaxRetryReached(contextProvider); callbackErr != nil {
 					fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
