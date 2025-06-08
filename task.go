@@ -143,13 +143,7 @@ func NewSnerdTask(
 		return nil, fmt.Errorf("failed to serialize parameters: %w", err)
 	}
 
-	// If retryAfterHours is 0, set a small default value (1 second)
-	// This is a fallback since we're now using our own retry logic in UpdateRetryConfig
-	if retryAfterHours <= 0 {
-		retryAfterHours = 1.0 / 3600.0 // 1 second in hours
-	}
-
-	// For new tasks, set RetryAfterTime to now (immediately due)
+	// For new tasks, we don't set RetryAfterTime here - it will be set when the task is executed
 	task := &SnerdTask{
 		TaskID:          taskID,
 		TaskType:        taskType,
@@ -157,11 +151,10 @@ func NewSnerdTask(
 		RetryCount:      0,
 		MaxRetries:      maxRetries,
 		RetryAfterHours: retryAfterHours,
-		RetryAfterTime:  time.Now(), // Make new tasks immediately due
+		// Don't set RetryAfterTime here - it will be set when the task is executed
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
-
 
 	return task, nil
 }
