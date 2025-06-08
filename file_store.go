@@ -349,6 +349,13 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 	// Mark the old task as deleted by setting DeletedAt
 	now := time.Now()
 	latest.DeletedAt = &now
+	latest.UpdatedAt = now
+
+	// Persist the deletion of the old task
+	if err := fs.CreateTask(latest); err != nil {
+		log.Printf("[UpdateTaskRetryConfig] ERROR persisting deleted old task: %v\n", err)
+		return fmt.Errorf("persist deleted old task: %w", err)
+	}
 
 	// Create a copy of the task to update
 	updatedTask := *latest

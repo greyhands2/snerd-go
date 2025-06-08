@@ -284,7 +284,6 @@ func (q *AnyQueue) ProcessDueTasks() {
 			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
 
-
 			// Get current retry count (don't increment yet - let UpdateTaskRetryConfig handle it)
 			currentRetry := snerdTask.RetryCount
 
@@ -319,7 +318,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 					if updateErr != nil {
 						fmt.Printf("Error updating task retry config: %v\n", updateErr)
 					} else {
-						fmt.Printf("Successfully updated task %s for retry %d/%d\n", 
+						fmt.Printf("Successfully updated task %s for retry %d/%d\n",
 							snerdTask.GetTaskID(), currentRetry+1, snerdTask.MaxRetries)
 					}
 				} else {
@@ -328,16 +327,16 @@ func (q *AnyQueue) ProcessDueTasks() {
 			} else {
 				// Max retries reached - execute the task's OnMaxRetryReached method if implemented
 				fmt.Printf("Task %s reached max retries (%d)\n", snerdTask.GetTaskID(), snerdTask.MaxRetries)
-				
+
 				// Log the final error with the actual retry count (which is MaxRetries since we start at 0)
-				fmt.Printf("Final error for task %s (attempts: %d): %v\n", 
+				fmt.Printf("Final error for task %s (attempts: %d): %v\n",
 					snerdTask.GetTaskID(), snerdTask.RetryCount+1, err)
-				
+
 				// Create a context provider function that returns the error
 				contextProvider := func() interface{} {
 					return fmt.Errorf("task failed after %d attempts: %v", snerdTask.RetryCount+1, err)
 				}
-				
+
 				// Pass the context provider to OnMaxRetryReached
 				if callbackErr := snerdTask.OnMaxRetryReached(contextProvider); callbackErr != nil {
 					fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
