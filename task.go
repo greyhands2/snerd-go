@@ -232,7 +232,7 @@ func (t *SnerdTask) UpdateRetryConfig(errorObj error) {
 	t.RetryCount++
 	t.RetryAfterTime = time.Now().Add(time.Duration(t.RetryAfterHours * float64(time.Hour)))
 	t.LastErrorObj = errorObj
-	
+
 	// Update LastJobError with the new error information
 	if errorObj != nil {
 		t.LastJobError = &JobErrorReturn{
@@ -243,7 +243,7 @@ func (t *SnerdTask) UpdateRetryConfig(errorObj error) {
 	} else {
 		t.LastJobError = nil
 	}
-	
+
 	t.UpdatedAt = time.Now()
 }
 

@@ -269,7 +269,7 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	dueTasks := make([]*RetryableTask, 0, len(tasks))
 
 	for _, task := range tasks {
-		if task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now) {
+		if (task.DeletedAt == nil || task.DeletedAt.IsZero()) && (task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now)) {
 			dueTasks = append(dueTasks, task)
 		}
 	}
