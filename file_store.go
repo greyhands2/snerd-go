@@ -249,7 +249,9 @@ func (fs *FileStore) ReadTasks() ([]*RetryableTask, error) {
 	// Convert map to slice
 	tasks := make([]*RetryableTask, 0, len(taskMap))
 	for _, task := range taskMap {
-		tasks = append(tasks, task)
+		if task.DeletedAt == nil || task.DeletedAt.IsZero() {
+			tasks = append(tasks, task)
+		}
 	}
 
 	return tasks, nil
