@@ -284,7 +284,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 			// Handle retry logic if the task has failed
 			if snerdTask.RetryCount < snerdTask.MaxRetries {
-				E
+
 				fmt.Println("RETRYING THE TASK!!!!")
 				// Calculate next retry time
 				snerdTask.RetryCount++
