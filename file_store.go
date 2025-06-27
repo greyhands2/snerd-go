@@ -423,11 +423,20 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	now := time.Now()
 	deletedTask.DeletedAt = &now
 
+	// Debug: Print DeletedAt before marshaling
+	if deletedTask.DeletedAt != nil {
+		fmt.Printf("[DeleteTask] About to delete task %s at %v\n", deletedTask.TaskID, *deletedTask.DeletedAt)
+	} else {
+		fmt.Printf("[DeleteTask] About to delete task %s but DeletedAt is nil!\n", deletedTask.TaskID)
+	}
+
 	// Marshal to JSON
 	data, err := json.Marshal(&deletedTask)
 	if err != nil {
 		return fmt.Errorf("marshal task for deletion: %w", err)
 	}
+
+	fmt.Printf("[DeleteTask] Marshaled JSON for deleted task %s: %s\n", deletedTask.TaskID, string(data))
 
 	// Open the file for appending
 	f, err := os.OpenFile(fs.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
