@@ -423,6 +423,15 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	now := time.Now()
 	deletedTask.DeletedAt = &now
 
+	// Also update deletedAt inside TaskData JSON string
+	var taskDataMap map[string]interface{}
+	if err := json.Unmarshal([]byte(deletedTask.TaskData), &taskDataMap); err == nil {
+		taskDataMap["deletedAt"] = now.Format(time.RFC3339)
+		if updatedTaskData, err := json.Marshal(taskDataMap); err == nil {
+			deletedTask.TaskData = string(updatedTaskData)
+		}
+	}
+
 	// Debug: Print DeletedAt before marshaling
 	if deletedTask.DeletedAt != nil {
 		fmt.Printf("[DeleteTask] About to delete task %s at %v\n", deletedTask.TaskID, *deletedTask.DeletedAt)
