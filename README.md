@@ -11,8 +11,69 @@ A Go library for parameter-based task execution with persistent storage and auto
 - Centralized task handler registration
 - Error tracking with detailed failure information
 - Background processing of tasks
+- Proper task deletion after max retries
 
 ---
+
+## Quick Start Example
+
+Here's a simple example of how to use snerd-go for processing tasks in the background with automatic retry:
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	snerd "github.com/greyhands2/snerd-go"
+)
+
+func main() {
+	// 1. Register task handlers
+	snerd.RegisterTaskHandler("http-fetch", func(parameters string) error {
+		var params struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal([]byte(parameters), &params)
+		
+		fmt.Printf("Fetching URL: %s\n", params.URL)
+		// ... actual HTTP logic here ...
+		return nil
+	})
+	
+	// 2. Register max retry handler (optional)
+	snerd.RegisterMaxRetryHandler("http-fetch", func(parameters string) error {
+		var params struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal([]byte(parameters), &params)
+		
+		fmt.Printf("Max retries reached for URL: %s\n", params.URL)
+		return nil
+	})
+	
+	// 3. Create a queue
+	queue := snerd.NewAnyQueue("my-queue", 10)
+	
+	// 4. Create and enqueue a task
+	task, _ := snerd.CreateTask(
+		"task-123",         // Unique task ID
+		"http-fetch",       // Task type
+		map[string]string{
+			"url": "https://example.com",
+		},
+		5,                  // Max retries
+		0.25,               // Retry after hours (15 mins)
+	)
+	
+	queue.Enqueue(task)
+	
+	// Tasks will be processed in the background
+	time.Sleep(time.Minute * 5)
+}
+```
 
 ## Example: Email Sending Task
 
@@ -119,6 +180,94 @@ func sendWelcomeEmail(userEmail, userName string) error {
     queue := snerd.NewAnyQueue("email-queue", 100)
     return queue.EnqueueSnerdTask(emailTask)
 }
+```
+
+## Example: Task Retry and Deletion Behavior
+
+The snerd-go library handles automatic retries for failed tasks and proper task deletion once the maximum retry count is reached.
+
+### Task Lifecycle
+
+1. When a task fails, it is scheduled for retry based on the configured retry interval
+2. The retry count is incremented with each attempt
+3. Once the retry count reaches the maximum, the task is deleted and the max retry handler is called
+4. Deleted tasks are filtered out and will never be retried again
+
+### Task Deletion Example
+
+Here's an example of how snerd-go handles task retry and deletion, using an HTTP fetch task that will fail:
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	snerd "github.com/greyhands2/snerd-go"
+	"time"
+)
+
+func main() {
+	// Register HTTP task handler
+	snerd.RegisterTaskHandler("http-fetch", func(parameters string) error {
+		var params struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal([]byte(parameters), &params)
+		
+		// This will fail because the domain doesn't exist
+		fmt.Printf("[http-fetch] Fetching URL: %s\n", params.URL)
+		return fmt.Errorf("error making HTTP request: domain not found")
+	})
+	
+	// Register handler for when max retries is reached
+	snerd.RegisterMaxRetryHandler("http-fetch", func(parameters string) error {
+		var params struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal([]byte(parameters), &params)
+		
+		fmt.Printf("[http-fetch] Max retries reached for URL: %s\n", params.URL)
+		return nil
+	})
+	
+	// Create and start a queue
+	queue := snerd.NewAnyQueue("my-queue", 10)
+	
+	// Create a task that will fail
+	task, _ := snerd.CreateTask(
+		"http1",
+		"http-fetch",
+		map[string]string{
+			"url": "https://non-existent-domain-123456.com/get",
+		},
+		5,      // Max retries
+		0.0083, // Retry after ~30 seconds
+	)
+	
+	// Enqueue the task
+	queue.Enqueue(task)
+	
+	// Wait for the task to be processed and reach max retries
+	time.Sleep(time.Second * 180)
+}
+```
+
+With this setup:
+
+1. The task will be retried 5 times (the maximum retry count)
+2. Each retry will occur approximately 30 seconds after the previous attempt
+3. After the 5th retry, the task will be marked as deleted and never processed again
+4. The max retry handler will be called to perform any cleanup or notification
+
+### Task Storage
+
+All tasks are stored in a log file under the `.snerdata/tasks/` directory. The file uses an append-only log format where each task operation (creation, update, deletion) is written as a new JSON line. The file is compacted periodically to remove old entries for deleted tasks.
+
+Example task log entry for a task that has reached max retries and been deleted:
+
+```json
+{"taskId":"http1","retryCount":5,"maxRetries":5,"retryAfterHours":0.0083,"retryAfterTime":"2025-07-02T23:07:41.901013+01:00","taskData":"{\"deletedAt\":\"2025-07-02T23:07:51+01:00\",\"lastError\":\"error making HTTP request: Get \\\"https://non-existent-domain-123456.com/get\\\": dial tcp: lookup non-existent-domain-123456.com: no such host\",\"lastErrorObj\":null,\"lastErrorTime\":\"2025-07-02T23:07:41+01:00\",\"lastJobError\":null,\"maxRetries\":5,\"parameters\":\"{\\\"url\\\":\\\"https://non-existent-domain-123456.com/get\\\"}\",\"retryAfterHours\":0.0083,\"retryAfterTime\":\"2025-07-02T23:07:41+01:00\",\"retryCount\":5,\"taskId\":\"http1\",\"taskType\":\"http-fetch\"}","taskType":"http-fetch","LastErrorObj":null,"LastJobError":{"error":"error making HTTP request: Get \"https://non-existent-domain-123456.com/get\": dial tcp: lookup non-existent-domain-123456.com: no such host","retry_worthy":true}}
 ```
 
 ## Example: Image Processing Task
