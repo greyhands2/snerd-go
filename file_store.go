@@ -271,8 +271,32 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	dueTasks := make([]*RetryableTask, 0, len(tasks))
 
 	for _, task := range tasks {
-		if (task.DeletedAt == nil || task.DeletedAt.IsZero()) && (task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now)) {
+		// Double-check deleted status (both outer and inner JSON)
+		isDeleted := false
+		if task.DeletedAt != nil && !task.DeletedAt.IsZero() {
+			isDeleted = true
+			fmt.Printf("[ReadDueTasks] Task %s is marked as deleted (outer DeletedAt=%v), skipping\n", 
+				task.TaskID, task.DeletedAt)
+		}
+
+		// Also check inner JSON for deletedAt
+		var taskDataMap map[string]interface{}
+		if err := json.Unmarshal([]byte(task.TaskData), &taskDataMap); err == nil {
+			if deletedAtStr, ok := taskDataMap["deletedAt"].(string); ok && deletedAtStr != "" && deletedAtStr != "0001-01-01T00:00:00Z" {
+				deletedAtTime, err := time.Parse(time.RFC3339, deletedAtStr)
+				if err == nil && !deletedAtTime.IsZero() {
+					isDeleted = true
+					fmt.Printf("[ReadDueTasks] Task %s is marked as deleted (inner deletedAt=%v), skipping\n", 
+						task.TaskID, deletedAtStr)
+				}
+			}
+		}
+
+		// Only add non-deleted tasks that are due
+		if !isDeleted && (task.RetryAfterTime.Before(now) || task.RetryAfterTime.Equal(now)) {
 			dueTasks = append(dueTasks, task)
+			fmt.Printf("[ReadDueTasks] Task %s is due for execution (retryAfterTime=%v)\n", 
+				task.TaskID, task.RetryAfterTime)
 		}
 	}
 
