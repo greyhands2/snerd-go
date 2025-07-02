@@ -336,11 +336,20 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 				// Delete the task after it has reached max retries
 				if q.fileStore != nil {
-					deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
-					if deleteErr != nil {
-						fmt.Printf("Error deleting task: %v\n", deleteErr)
+					// First check if the task is already deleted
+					latestTask, getErr := q.fileStore.GetLatestTask(snerdTask.GetTaskID())
+					if getErr != nil {
+						fmt.Printf("Error getting latest task: %v\n", getErr)
+					} else if latestTask.DeletedAt == nil || latestTask.DeletedAt.IsZero() {
+						// Only delete if not already deleted
+						deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
+						if deleteErr != nil {
+							fmt.Printf("Error deleting task: %v\n", deleteErr)
+						} else {
+							fmt.Printf("Successfully deleted task %s after max retries\n", snerdTask.GetTaskID())
+						}
 					} else {
-						fmt.Printf("Successfully deleted task %s after max retries\n", snerdTask.GetTaskID())
+						fmt.Printf("Task %s is already deleted, skipping deletion\n", snerdTask.GetTaskID())
 					}
 				}
 			}
@@ -350,20 +359,26 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 			// Delete the task after successful execution
 			if q.fileStore != nil {
-				fmt.Println("CALLING QUEUE FILESTORE FOR DELETING THE TASK AFTER SUCCESSFULT TASK!!!!")
-				// Ensure we soft-delete by using the proper method
-				deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
-				if deleteErr != nil {
-					fmt.Printf("Error deleting task %s: %v\n", snerdTask.GetTaskID(), deleteErr)
-				} else {
-					fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.GetTaskID())
+				fmt.Println("CALLING QUEUE FILESTORE FOR DELETING THE TASK AFTER SUCCESSFUL TASK!!!!")
+				// First check if the task is already deleted
+				latestTask, getErr := q.fileStore.GetLatestTask(snerdTask.GetTaskID())
+				if getErr != nil {
+					fmt.Printf("Error getting latest task: %v\n", getErr)
+				} else if latestTask.DeletedAt == nil || latestTask.DeletedAt.IsZero() {
+					// Ensure we soft-delete by using the proper method, but only if not already deleted
+					deleteErr := q.fileStore.DeleteTask(snerdTask.GetTaskID())
+					if deleteErr != nil {
+						fmt.Printf("Error deleting task %s: %v\n", snerdTask.GetTaskID(), deleteErr)
+					} else {
+						fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.GetTaskID())
 
-					// Record task completion statistics
-					duration := time.Since(snerdTask.CreatedAt)
-					fmt.Printf("Task %s completed in %v (type=%s)\n",
-						snerdTask.GetTaskID(),
-						duration.Round(time.Millisecond),
-						snerdTask.TaskType)
+						// Record task completion statistics
+						duration := time.Since(snerdTask.CreatedAt)
+						fmt.Printf("Task %s completed in %v (type=%s)\n",
+							snerdTask.GetTaskID(),
+							duration.Round(time.Millisecond),
+							snerdTask.TaskType)
+					}
 				}
 			}
 		}

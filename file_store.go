@@ -347,6 +347,12 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 // We use a soft deleting approach alongside compaction
 // getLatestTask returns the most recent version of a task by its ID
 // It scans the entire task log to find the most up-to-date version
+
+// GetLatestTask is the exported version of getLatestTask that returns the most recent version of a task by its ID
+// This is exported for use by other packages
+func (fs *FileStore) GetLatestTask(taskID string) (*RetryableTask, error) {
+	return fs.getLatestTask(taskID)
+}
 func (fs *FileStore) getLatestTask(taskID string) (*RetryableTask, error) {
 	file, err := os.Open(fs.filePath)
 	if err != nil {
