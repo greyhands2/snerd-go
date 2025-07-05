@@ -4,6 +4,12 @@
 
 A Go library for parameter-based task execution with persistent storage and automatic retries.
 
+## Installation
+
+```bash
+go get github.com/greyhands2/snerd-go
+```
+
 ## Features
 - Parameter-based task execution system (no need to implement interfaces)
 - Persistent task storage in a hidden `.snerdata` folder
@@ -269,6 +275,177 @@ Example task log entry for a task that has reached max retries and been deleted:
 ```json
 {"taskId":"http1","retryCount":5,"maxRetries":5,"retryAfterHours":0.0083,"retryAfterTime":"2025-07-02T23:07:41.901013+01:00","taskData":"{\"deletedAt\":\"2025-07-02T23:07:51+01:00\",\"lastError\":\"error making HTTP request: Get \\\"https://non-existent-domain-123456.com/get\\\": dial tcp: lookup non-existent-domain-123456.com: no such host\",\"lastErrorObj\":null,\"lastErrorTime\":\"2025-07-02T23:07:41+01:00\",\"lastJobError\":null,\"maxRetries\":5,\"parameters\":\"{\\\"url\\\":\\\"https://non-existent-domain-123456.com/get\\\"}\",\"retryAfterHours\":0.0083,\"retryAfterTime\":\"2025-07-02T23:07:41+01:00\",\"retryCount\":5,\"taskId\":\"http1\",\"taskType\":\"http-fetch\"}","taskType":"http-fetch","LastErrorObj":null,"LastJobError":{"error":"error making HTTP request: Get \"https://non-existent-domain-123456.com/get\": dial tcp: lookup non-existent-domain-123456.com: no such host","retry_worthy":true}}
 ```
+
+## API Reference
+
+### Task Management
+
+```go
+// Create a new task with specified retry parameters
+CreateTask(taskID string, taskType string, parameters interface{}, maxRetries int, retryAfterHours float64) (*SnerdTask, error)
+
+// Create a task with default parameters
+CreateTaskWithDefaults(taskID string, taskType string, parameters interface{}) (*SnerdTask, error)
+
+// Register a handler function for a specific task type
+RegisterTaskHandler(taskType string, handlerFunc TaskHandlerFunc)
+
+// Register a handler function for when a task reaches max retries
+RegisterMaxRetryHandler(taskType string, handlerFunc TaskHandlerFunc)
+```
+
+### Queue Operations
+
+```go
+// Create a new task queue with specified capacity
+NewAnyQueue(name string, capacity int) *AnyQueue
+
+// Enqueue a task for processing
+queue.Enqueue(task *RetryableTask) error
+
+// Enqueue a SnerdTask for processing
+queue.EnqueueSnerdTask(task *SnerdTask) error
+
+// Get the current size of the queue
+queue.Size() int
+
+// Process due tasks (called automatically by the background processor)
+queue.ProcessDueTasks()
+
+// Stop the background processor
+queue.StopProcessor()
+```
+
+### FileStore Operations
+
+```go
+// Create a new file store for task persistence
+NewFileStore(storagePath string) (*FileStore, error)
+
+// Read all tasks from storage
+fileStore.ReadTasks() ([]*RetryableTask, error)
+
+// Read all due tasks (tasks ready for processing)
+fileStore.ReadDueTasks() ([]*RetryableTask, error)
+
+// Update the retry config for a task
+fileStore.UpdateTaskRetryConfig(taskID string, retryCount int, retryAfterTime time.Time) error
+
+// Delete a task
+fileStore.DeleteTask(taskID string) error
+
+// Get the latest version of a task
+fileStore.GetLatestTask(taskID string) (*RetryableTask, error)
+```
+
+## Configuration Options
+
+### Storage Configuration
+
+By default, snerd-go stores tasks in a `.snerdata/tasks/tasks.log` directory within your application directory. You can customize this location when creating a FileStore:
+
+```go
+// Custom storage path
+fileStore, err := snerd.NewFileStore("/path/to/custom/storage")
+if err != nil {
+    log.Fatalf("Error creating file store: %v", err)
+}
+
+// Use this file store with your queue
+queue := snerd.NewAnyQueue("my-queue", 10)
+queue.WithFileStore(fileStore)
+```
+
+### Queue Processing
+
+You can configure how frequently the queue processes tasks by modifying the queue's processor interval:
+
+```go
+queue := snerd.NewAnyQueue("my-queue", 10)
+queue.SetProcessorInterval(time.Second * 30) // Process every 30 seconds
+```
+
+### Retry Configuration
+
+When creating tasks, you can specify:
+- Maximum number of retries
+- Retry interval in hours
+
+```go
+// Retry up to 5 times, waiting 0.25 hours (15 minutes) between attempts
+task, err := snerd.CreateTask(
+    "task123",
+    "email-send",
+    parameters,
+    5,     // maxRetries
+    0.25,  // retryAfterHours
+)
+```
+
+## Error Handling
+
+The snerd-go library provides several ways to handle and track errors:
+
+### Task Handler Errors
+
+Errors returned from task handlers are automatically captured and stored with the task. These errors will trigger the retry mechanism unless the task has reached its maximum retry count.
+
+```go
+snerd.RegisterTaskHandler("my-task", func(parameters string) error {
+    // If this returns an error, the task will be retried
+    if err := doSomething(); err != nil {
+        return fmt.Errorf("task failed: %w", err)
+    }
+    return nil
+})
+```
+
+### Max Retry Handlers
+
+When a task reaches its maximum retry count, the registered max retry handler is called, allowing you to perform cleanup or notify about the permanent failure:
+
+```go
+snerd.RegisterMaxRetryHandler("my-task", func(parameters string) error {
+    // This is called when a task has reached max retries
+    sendFailureNotification(parameters)
+    return nil
+})
+```
+
+### Error Information
+
+Each task maintains error information in both the outer RetryableTask struct and the inner TaskData JSON:
+
+- `LastJobError` - Contains structured error information
+- `taskData.lastError` - Contains the error message string
+- `taskData.lastErrorTime` - When the error occurred
+
+## Troubleshooting
+
+### Common Issues
+
+#### Task Not Being Processed
+
+- Verify the task is properly enqueued by checking the queue size
+- Ensure the task handler is registered for the correct task type
+- Check the storage file to see if the task was written correctly
+
+#### Tasks Being Retried Indefinitely
+
+- Verify that the MaxRetries value is properly set when creating tasks
+- Check for bugs in your task handler that might affect the retry logic
+- Ensure the DeletedAt field is properly set in both the outer RetryableTask struct and inner TaskData JSON
+
+#### Storage Issues
+
+- Verify the application has write permissions to the `.snerdata` directory
+- Check disk space if tasks are not being saved
+- If the log file grows too large, consider increasing the compaction frequency
+
+#### Concurrency Issues
+
+- The library uses mutexes to handle concurrent access to the file store
+- If you're experiencing deadlocks, ensure you're not calling file store methods recursively
 
 ## Example: Image Processing Task
 
