@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // Task represents a unit of work that can be processed by the queue system.
@@ -118,8 +120,10 @@ type SnerdTask struct {
 	TaskType   string `json:"taskType"`   // Type of task (maps to registered handler)
 	Parameters string `json:"parameters"` // JSON-encoded parameters for the task
 
-	RateLimitGroup  *string `json:"rate_limit_group,omitempty"`
-	MaxPerMinute    *int    `json:"max_per_minute,omitempty"`
+	RateLimitGroup *string `json:"rate_limit_group,omitempty"`
+	MaxPerMinute   *int    `json:"max_per_minute,omitempty"`
+	AutoDedupe     *bool   `json:"autoDedupe,omitempty"`
+	PayloadHash    *string `json:"payloadHash,omitempty"`
 
 	// Error Tracking
 	LastErrorObj error           `json:"lastErrorObj"` // Last error that occurred
@@ -139,14 +143,32 @@ func NewSnerdTask(
 	maxRetries int,
 	retryAfterHours float64,
 ) (*SnerdTask, error) {
-	// Serialize the parameters to JSON
+	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil)
+}
+
+// NewSnerdTaskAdvanced creates a new task with advanced parameters
+func NewSnerdTaskAdvanced(
+	taskID string,
+	taskType string,
+	parameters interface{},
+	maxRetries int,
+	retryAfterHours float64,
+	rateLimitGroup *string,
+	maxPerMinute *int,
+	autoDedupe *bool,
+) (*SnerdTask, error) {
 	paramJSON, err := json.Marshal(parameters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize parameters: %w", err)
 	}
 
-	// For new tasks, set RetryAfterTime to now (immediately due)
-	// Only tasks being retried will have RetryAfterTime set to the future
+	var payloadHash *string
+	if autoDedupe != nil && *autoDedupe {
+		hash := xxhash.Sum64String(taskType + string(paramJSON))
+		hashStr := fmt.Sprintf("%x", hash)
+		payloadHash = &hashStr
+	}
+
 	return &SnerdTask{
 		TaskID:          taskID,
 		TaskType:        taskType,
@@ -155,6 +177,10 @@ func NewSnerdTask(
 		MaxRetries:      maxRetries,
 		RetryAfterHours: retryAfterHours,
 		RetryAfterTime:  time.Now(), // Make new tasks immediately due
+		RateLimitGroup:  rateLimitGroup,
+		MaxPerMinute:    maxPerMinute,
+		AutoDedupe:      autoDedupe,
+		PayloadHash:     payloadHash,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}, nil
@@ -263,6 +289,8 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 		TaskType:        t.TaskType,
 		RateLimitGroup:  t.RateLimitGroup,
 		MaxPerMinute:    t.MaxPerMinute,
+		AutoDedupe:      t.AutoDedupe,
+		PayloadHash:     t.PayloadHash,
 		EmbeddedTask:    t,
 		DeletedAt:       t.DeletedAt,
 		CreatedAt:       t.CreatedAt,
@@ -289,6 +317,8 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		TaskType:        rt.TaskType,
 		RateLimitGroup:  rt.RateLimitGroup,
 		MaxPerMinute:    rt.MaxPerMinute,
+		AutoDedupe:      rt.AutoDedupe,
+		PayloadHash:     rt.PayloadHash,
 		LastErrorObj:    rt.LastErrorObj,
 		LastJobError:    rt.LastJobError,
 		CreatedAt:       rt.CreatedAt,

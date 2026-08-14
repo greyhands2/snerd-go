@@ -28,6 +28,8 @@ type RetryableTask struct {
 	TaskType        string    `json:"taskType"` // For diagnostic purposes only
 	RateLimitGroup  *string   `json:"rate_limit_group,omitempty"`
 	MaxPerMinute    *int      `json:"max_per_minute,omitempty"`
+	AutoDedupe      *bool     `json:"autoDedupe,omitempty"`
+	PayloadHash     *string   `json:"payloadHash,omitempty"`
 	// Fields to store error information for OnMaxRetryReached
 	LastErrorObj error
 	LastJobError *JobErrorReturn

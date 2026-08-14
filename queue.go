@@ -24,6 +24,8 @@ type AnyQueue struct {
 	processorActive bool
 	processorCtx    context.Context
 	processorCancel context.CancelFunc
+	activeHashes    map[string]bool
+	hashMu          sync.Mutex
 }
 
 // TaskFactory creates a Task from its stored data.
@@ -49,14 +51,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		}
 	}
 
-	// Create the queue with the specified parameters
-	q := &AnyQueue{
-		name:            name,
-		maxSize:         maxSize,
-		processorActive: false,
-	}
-
-	// Initialize the file store (uses .snerdata hidden folder)
+	// Initialize the file store
 	fileStore, err := NewFileStore(taskStorePath)
 	if err != nil {
 		fmt.Printf("Warning: Could not initialize file store: %v\n", err)
@@ -82,8 +77,27 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 			fmt.Printf("Error: Still could not initialize file store: %v\n", err)
 		}
 	}
-	q.fileStore = fileStore
-	q.rateLimiter = NewRateLimiter(filepath.Dir(taskStorePath))
+
+	initialHashes := make(map[string]bool)
+	if fileStore != nil {
+		if tasks, rErr := fileStore.ReadTasks(); rErr == nil {
+			for _, task := range tasks {
+				if (task.DeletedAt == nil || task.DeletedAt.IsZero()) && task.PayloadHash != nil {
+					initialHashes[*task.PayloadHash] = true
+				}
+			}
+		}
+	}
+
+	// Create the queue with the specified parameters
+	q := &AnyQueue{
+		name:            name,
+		maxSize:         maxSize,
+		processorActive: false,
+		activeHashes:    initialHashes,
+		fileStore:       fileStore,
+		rateLimiter:     NewRateLimiter(filepath.Dir(taskStorePath)),
+	}
 
 	// Start the task processor in the background
 	q.startProcessor(processingInterval)
@@ -149,6 +163,17 @@ func (q *AnyQueue) Enqueue(task Task) error {
 // This is the preferred method for adding new tasks as it uses the parameter-based
 // approach that doesn't require client-side task registration
 func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
+	if task.PayloadHash != nil {
+		q.hashMu.Lock()
+		if q.activeHashes[*task.PayloadHash] {
+			q.hashMu.Unlock()
+			fmt.Printf("Duplicate task detected (hash: %s), silently dropping.\n", *task.PayloadHash)
+			return nil
+		}
+		q.activeHashes[*task.PayloadHash] = true
+		q.hashMu.Unlock()
+	}
+
 	// Convert the SnerdTask to a RetryableTask for storage
 	zeroTime := time.Time{}
 	task.DeletedAt = &zeroTime
@@ -212,6 +237,12 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 				if q.fileStore != nil {
 					if deleteErr := q.fileStore.DeleteTask(task.GetTaskID()); deleteErr != nil {
 						fmt.Printf("Error deleting task: %v\n", deleteErr)
+					} else {
+						if task.PayloadHash != nil {
+							q.hashMu.Lock()
+							delete(q.activeHashes, *task.PayloadHash)
+							q.hashMu.Unlock()
+						}
 					}
 				}
 				atomic.AddInt64(&q.totalDequeued, 1)
@@ -361,6 +392,11 @@ func (q *AnyQueue) ProcessDueTasks() {
 						if deleteErr != nil {
 							fmt.Printf("Error deleting task: %v\n", deleteErr)
 						} else {
+							if snerdTask.PayloadHash != nil {
+								q.hashMu.Lock()
+								delete(q.activeHashes, *snerdTask.PayloadHash)
+								q.hashMu.Unlock()
+							}
 							fmt.Printf("Successfully deleted task %s after max retries\n", snerdTask.GetTaskID())
 						}
 					} else {
@@ -385,6 +421,11 @@ func (q *AnyQueue) ProcessDueTasks() {
 					if deleteErr != nil {
 						fmt.Printf("Error deleting task %s: %v\n", snerdTask.GetTaskID(), deleteErr)
 					} else {
+						if snerdTask.PayloadHash != nil {
+							q.hashMu.Lock()
+							delete(q.activeHashes, *snerdTask.PayloadHash)
+							q.hashMu.Unlock()
+						}
 						fmt.Printf("Successfully deleted task %s after completion\n", snerdTask.GetTaskID())
 
 						// Record task completion statistics
