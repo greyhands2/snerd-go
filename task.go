@@ -118,6 +118,9 @@ type SnerdTask struct {
 	TaskType   string `json:"taskType"`   // Type of task (maps to registered handler)
 	Parameters string `json:"parameters"` // JSON-encoded parameters for the task
 
+	RateLimitGroup  *string `json:"rate_limit_group,omitempty"`
+	MaxPerMinute    *int    `json:"max_per_minute,omitempty"`
+
 	// Error Tracking
 	LastErrorObj error           `json:"lastErrorObj"` // Last error that occurred
 	LastJobError *JobErrorReturn `json:"lastJobError"` // Detailed error information
@@ -258,6 +261,8 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 		RetryAfterTime:  t.RetryAfterTime,
 		TaskData:        t.Parameters,
 		TaskType:        t.TaskType,
+		RateLimitGroup:  t.RateLimitGroup,
+		MaxPerMinute:    t.MaxPerMinute,
 		EmbeddedTask:    t,
 		DeletedAt:       t.DeletedAt,
 		CreatedAt:       t.CreatedAt,
@@ -282,6 +287,8 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		RetryAfterHours: rt.RetryAfterHours,
 		RetryAfterTime:  rt.RetryAfterTime,
 		TaskType:        rt.TaskType,
+		RateLimitGroup:  rt.RateLimitGroup,
+		MaxPerMinute:    rt.MaxPerMinute,
 		LastErrorObj:    rt.LastErrorObj,
 		LastJobError:    rt.LastJobError,
 		CreatedAt:       rt.CreatedAt,
