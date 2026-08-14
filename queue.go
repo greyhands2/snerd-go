@@ -20,6 +20,7 @@ type AnyQueue struct {
 	totalEnqueued   int64
 	totalDequeued   int64
 	fileStore       *FileStore
+	rateLimiter     *RateLimiter
 	processorActive bool
 	processorCtx    context.Context
 	processorCancel context.CancelFunc
@@ -82,6 +83,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		}
 	}
 	q.fileStore = fileStore
+	q.rateLimiter = NewRateLimiter(filepath.Dir(taskStorePath))
 
 	// Start the task processor in the background
 	q.startProcessor(processingInterval)
@@ -276,6 +278,19 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 		// Execute the handler with the task parameters
 		fmt.Printf("Task parameters: %s\n", snerdTask.Parameters)
+
+		// Check Rate Limits before executing
+		if snerdTask.RateLimitGroup != nil && snerdTask.MaxPerMinute != nil {
+			if !q.rateLimiter.CheckLimit(*snerdTask.RateLimitGroup, *snerdTask.MaxPerMinute) {
+				fmt.Printf("Rate limit exceeded for task %s (group: %s). Deferring for 60s.\n", snerdTask.GetTaskID(), *snerdTask.RateLimitGroup)
+				snerdTask.RetryAfterTime = time.Now().Add(60 * time.Second)
+				if q.fileStore != nil {
+					q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), fmt.Errorf("rate_limit_exceeded"))
+				}
+				continue
+			}
+		}
+
 		err := handler(snerdTask.Parameters)
 		if err != nil {
 			fmt.Println("Error executing the TASK!!!!")

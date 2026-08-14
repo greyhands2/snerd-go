@@ -325,7 +325,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, errorObj error) error 
 		fs.mu.Unlock()
 		errMsg := fmt.Sprintf("cannot update a deleted task: %s", taskID)
 		log.Printf("[UpdateTaskRetryConfig] ERROR: %s\n", errMsg)
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	// Create a deep copy of the task to avoid data races
