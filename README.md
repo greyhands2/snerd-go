@@ -1,8 +1,10 @@
-# snerd-go
+<div align="center">
+  <img src="./assets/Designer-9.png" height="120" alt="Snerd-Go Logo" />
+  <h1>⚙️ snerd-go v0.2.0</h1>
+  <p>A Go library for parameter-based task execution with persistent storage and automatic retries.</p>
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
-
-A Go library for parameter-based task execution with persistent storage and automatic retries.
+  [![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
+</div>
 
 ## Installation
 
@@ -10,7 +12,10 @@ A Go library for parameter-based task execution with persistent storage and auto
 go get github.com/greyhands2/snerd-go
 ```
 
-## Features
+## 🔥 v0.2.0 AI-Era Features
+- **Smart API Rate-Limiting**: Natively tracks `rate_limit_group` execution velocity to prevent 429 "Too Many Requests" API errors.
+- **Payload-Hashing Deduplication**: Automatically computes cryptographic hashes to drop duplicate tasks instantly.
+- **Dynamic Float Prioritization**: A native Binary Max-Heap bypasses standard FIFO rules for high urgency tasks.
 - Parameter-based task execution system (no need to implement interfaces)
 - Persistent task storage in a hidden `.snerdata` folder
 - Automatic task retries with configurable retry logic
@@ -18,6 +23,14 @@ go get github.com/greyhands2/snerd-go
 - Error tracking with detailed failure information
 - Background processing of tasks
 - Proper task deletion after max retries
+
+### ⚙️ Advanced Task Configuration (v0.2.0)
+To power complex AI workflows, tasks can now be configured with advanced orchestration parameters:
+
+* **`autoDedupe` (`*bool`)**: If set to `true`, the daemon computes a cryptographic hash of the `taskType` and `parameters`. If an identical payload is currently sitting in the queue pending execution, this new task is silently dropped. Excellent for preventing duplicate generative AI requests from trigger-happy users!
+* **`urgencyScore` (`*float64`)**: A value (e.g. `0.99`) used to bypass the standard FIFO queue. SnerdMQ uses a true Binary Max-Heap to continually float tasks with the highest urgency score to the very front of the execution line. Standard tasks default to `0.0`.
+* **`rateLimitGroup` (`*string`)**: A custom string (e.g. `"openai_api"` or `"db_writes"`) that groups tasks together for backpressure control.
+* **`maxPerMinute` (`*int`)**: Used in conjunction with `rateLimitGroup`. If the queue processes more tasks in this group than the allowed limit within a 60-second rolling window, further tasks in this group are temporarily paused. This natively prevents 429 "Too Many Requests" errors when bursting third-party APIs.
 
 ---
 
@@ -712,9 +725,36 @@ snerd.RegisterMaxRetryHandler("email-send", func(parameters string) error {
 })
 ```
 
-### Creating Tasks
+### Creating Advanced Tasks (v0.2.0)
 
-Create tasks with parameters using the CreateTask helper function:
+Create tasks with AI-Era parameters using the `NewSnerdTaskAdvanced` constructor:
+
+```go
+// Helper variables for pointers
+rateLimitGroup := "openai_api"
+maxPerMinute := 50
+autoDedupe := true
+urgencyScore := 0.95
+
+// Create an advanced task
+task, err := snerd.NewSnerdTaskAdvanced(
+    "unique-task-id",     // Unique identifier for this task
+    "task-type",          // Task type (must match a registered handler)
+    map[string]string{    // Parameters for the task
+        "prompt": "Explain quantum physics",
+    },
+    5,                    // Maximum number of retries
+    0.25,                 // Retry interval in hours
+    &rateLimitGroup,      // Rate Limit Group
+    &maxPerMinute,        // Max requests per minute
+    &autoDedupe,          // Auto-deduplication
+    &urgencyScore,        // Urgency score (float higher)
+)
+```
+
+### Creating Standard Tasks
+
+Create basic tasks with the standard helper:
 
 ```go
 // Create a task with parameters
