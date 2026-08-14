@@ -76,8 +76,14 @@ func main() {
 	// 3. Create a queue
 	queue := snerd.NewAnyQueue("my-queue", 10)
 	
-	// 4. Create and enqueue a task
-	task, _ := snerd.CreateTask(
+	// 4. Setup Advanced AI-Era Configuration (v0.2.0)
+	rateLimitGroup := "http_api"
+	maxPerMinute := 60
+	autoDedupe := true
+	urgencyScore := 0.99
+
+	// 5. Create an advanced task with parameters
+	task, _ := snerd.NewSnerdTaskAdvanced(
 		"task-123",         // Unique task ID
 		"http-fetch",       // Task type
 		map[string]string{
@@ -85,6 +91,10 @@ func main() {
 		},
 		5,                  // Max retries
 		0.25,               // Retry after hours (15 mins)
+		&rateLimitGroup,    // Rate Limit Group
+		&maxPerMinute,      // Max requests per minute
+		&autoDedupe,        // Auto-deduplication
+		&urgencyScore,      // Urgency score (float higher)
 	)
 	
 	queue.Enqueue(task)
