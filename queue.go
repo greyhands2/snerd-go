@@ -26,6 +26,8 @@ type AnyQueue struct {
 	processorCancel context.CancelFunc
 	activeHashes    map[string]bool
 	hashMu          sync.Mutex
+	executingTasks map[string]bool
+	execMu         sync.Mutex
 }
 
 // TaskFactory creates a Task from its stored data.
@@ -94,6 +96,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		name:            name,
 		maxSize:         maxSize,
 		processorActive: false,
+		executingTasks:  make(map[string]bool),
 		activeHashes:    initialHashes,
 		fileStore:       fileStore,
 		rateLimiter:     NewRateLimiter(filepath.Dir(taskStorePath)),
@@ -191,8 +194,20 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 
 	// Process immediately if the task is due
 	if task.RetryAfterTime.Before(time.Now()) {
-		fmt.Println("THE FIRST TASK WOULD CERTAINLY HAPPEN!!!!!!!")
+		q.execMu.Lock()
+		if q.executingTasks[task.GetTaskID()] {
+			q.execMu.Unlock()
+			return nil
+		}
+		q.executingTasks[task.GetTaskID()] = true
+		q.execMu.Unlock()
+
 		go func() {
+			defer func() {
+				q.execMu.Lock()
+				delete(q.executingTasks, task.GetTaskID())
+				q.execMu.Unlock()
+			}()
 			// Execute the task
 			if err := task.Execute(); err != nil {
 				// Update retry configuration if we haven't exceeded max retries
@@ -313,7 +328,6 @@ func (q *AnyQueue) ProcessDueTasks() {
 		// Check Rate Limits before executing
 		if snerdTask.RateLimitGroup != nil && snerdTask.MaxPerMinute != nil {
 			if !q.rateLimiter.CheckLimit(*snerdTask.RateLimitGroup, *snerdTask.MaxPerMinute) {
-				fmt.Printf("Rate limit exceeded for task %s (group: %s). Deferring for 60s.\n", snerdTask.GetTaskID(), *snerdTask.RateLimitGroup)
 				snerdTask.RetryAfterTime = time.Now().Add(60 * time.Second)
 				if q.fileStore != nil {
 					q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), fmt.Errorf("rate_limit_exceeded"))
@@ -322,8 +336,23 @@ func (q *AnyQueue) ProcessDueTasks() {
 			}
 		}
 
-		err := handler(snerdTask.Parameters)
-		if err != nil {
+		q.execMu.Lock()
+		if q.executingTasks[snerdTask.GetTaskID()] {
+			q.execMu.Unlock()
+			continue
+		}
+		q.executingTasks[snerdTask.GetTaskID()] = true
+		q.execMu.Unlock()
+
+		go func(snerdTask *SnerdTask, handler func(string) error) {
+			defer func() {
+				q.execMu.Lock()
+				delete(q.executingTasks, snerdTask.GetTaskID())
+				q.execMu.Unlock()
+			}()
+			
+			err := handler(snerdTask.Parameters)
+			if err != nil {
 			fmt.Println("Error executing the TASK!!!!")
 			// Task failed execution
 			fmt.Printf("Error executing task %s: %v\n", snerdTask.GetTaskID(), err)
@@ -439,6 +468,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 			}
 		}
 		atomic.AddInt64(&q.totalDequeued, 1)
+		}(snerdTask, handler)
 	}
 }
 func (q *AnyQueue) Name() string {
