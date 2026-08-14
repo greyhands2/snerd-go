@@ -67,6 +67,8 @@ type AnyQueue struct {
 	executingTasks map[string]bool
 	execMu         sync.Mutex
 	workerPool     chan struct{}
+	progressSubs   []chan string
+	progressMu     sync.Mutex
 }
 
 // TaskFactory creates a Task from its stored data.
@@ -140,6 +142,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		fileStore:       fileStore,
 		rateLimiter:     NewRateLimiter(filepath.Dir(taskStorePath)),
 		workerPool:      make(chan struct{}, 100),
+		progressSubs:    make([]chan string, 0),
 	}
 
 	// Start the task processor in the background
@@ -594,4 +597,27 @@ type TaskWithData interface {
 	// Clone creates a new instance of this task with the same type but no data.
 	// This will be populated via UnmarshalData when reconstructing tasks.
 	Clone() TaskWithData
+}
+
+// SubscribeProgress returns a channel that receives real-time task progress JSON chunks.
+func (q *AnyQueue) SubscribeProgress() <-chan string {
+	q.progressMu.Lock()
+	defer q.progressMu.Unlock()
+	ch := make(chan string, 100)
+	q.progressSubs = append(q.progressSubs, ch)
+	return ch
+}
+
+// YieldProgress broadcasts a progress update to all subscribers.
+func (q *AnyQueue) YieldProgress(taskID string, data string) {
+	jsonStr := fmt.Sprintf(`{"action":"progress","task_id":"%s","data":"%s"}`, taskID, data)
+	q.progressMu.Lock()
+	defer q.progressMu.Unlock()
+	for _, ch := range q.progressSubs {
+		select {
+		case ch <- jsonStr:
+		default:
+			// Skip blocking
+		}
+	}
 }
