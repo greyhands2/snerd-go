@@ -124,6 +124,7 @@ type SnerdTask struct {
 	MaxPerMinute   *int    `json:"max_per_minute,omitempty"`
 	AutoDedupe     *bool   `json:"autoDedupe,omitempty"`
 	PayloadHash    *string `json:"payloadHash,omitempty"`
+	UrgencyScore   *float64 `json:"urgency_score,omitempty"`
 
 	// Error Tracking
 	LastErrorObj error           `json:"lastErrorObj"` // Last error that occurred
@@ -143,7 +144,7 @@ func NewSnerdTask(
 	maxRetries int,
 	retryAfterHours float64,
 ) (*SnerdTask, error) {
-	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil)
+	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil)
 }
 
 // NewSnerdTaskAdvanced creates a new task with advanced parameters
@@ -156,6 +157,7 @@ func NewSnerdTaskAdvanced(
 	rateLimitGroup *string,
 	maxPerMinute *int,
 	autoDedupe *bool,
+	urgencyScore *float64,
 ) (*SnerdTask, error) {
 	paramJSON, err := json.Marshal(parameters)
 	if err != nil {
@@ -181,6 +183,7 @@ func NewSnerdTaskAdvanced(
 		MaxPerMinute:    maxPerMinute,
 		AutoDedupe:      autoDedupe,
 		PayloadHash:     payloadHash,
+		UrgencyScore:    urgencyScore,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}, nil
@@ -291,6 +294,7 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 		MaxPerMinute:    t.MaxPerMinute,
 		AutoDedupe:      t.AutoDedupe,
 		PayloadHash:     t.PayloadHash,
+		UrgencyScore:    t.UrgencyScore,
 		EmbeddedTask:    t,
 		DeletedAt:       t.DeletedAt,
 		CreatedAt:       t.CreatedAt,
@@ -319,6 +323,7 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		MaxPerMinute:    rt.MaxPerMinute,
 		AutoDedupe:      rt.AutoDedupe,
 		PayloadHash:     rt.PayloadHash,
+		UrgencyScore:    rt.UrgencyScore,
 		LastErrorObj:    rt.LastErrorObj,
 		LastJobError:    rt.LastJobError,
 		CreatedAt:       rt.CreatedAt,

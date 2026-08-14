@@ -3,6 +3,7 @@ package snerd
 import (
 	"context"
 	"fmt"
+	"container/heap"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,43 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// AnyQueue is a thread-safe queue that manages SnerdTask execution, retry logic, and statistics
+
+// PriorityQueue implements heap.Interface and holds RetryableTasks
+type PriorityQueue []*RetryableTask
+
+func (pq PriorityQueue) Len() int { return len(pq) }
+
+func (pq PriorityQueue) Less(i, j int) bool {
+	scoreI := 0.0
+	if pq[i].UrgencyScore != nil {
+		scoreI = *pq[i].UrgencyScore
+	}
+	scoreJ := 0.0
+	if pq[j].UrgencyScore != nil {
+		scoreJ = *pq[j].UrgencyScore
+	}
+	// Max-Heap: greater score should be closer to root (Less returns true if i should pop BEFORE j)
+	return scoreI > scoreJ
+}
+
+func (pq PriorityQueue) Swap(i, j int) {
+	pq[i], pq[j] = pq[j], pq[i]
+}
+
+func (pq *PriorityQueue) Push(x interface{}) {
+	item := x.(*RetryableTask)
+	*pq = append(*pq, item)
+}
+
+func (pq *PriorityQueue) Pop() interface{} {
+	old := *pq
+	n := len(old)
+	item := old[n-1]
+	*pq = old[0 : n-1]
+	return item
+}
 
 // AnyQueue is a thread-safe queue that manages SnerdTask execution, retry logic, and statistics
 type AnyQueue struct {
@@ -28,6 +66,7 @@ type AnyQueue struct {
 	hashMu          sync.Mutex
 	executingTasks map[string]bool
 	execMu         sync.Mutex
+	workerPool     chan struct{}
 }
 
 // TaskFactory creates a Task from its stored data.
@@ -100,6 +139,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		activeHashes:    initialHashes,
 		fileStore:       fileStore,
 		rateLimiter:     NewRateLimiter(filepath.Dir(taskStorePath)),
+		workerPool:      make(chan struct{}, 100),
 	}
 
 	// Start the task processor in the background
@@ -192,12 +232,16 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 	// Update queue stats
 	atomic.AddInt64(&q.totalEnqueued, 1)
 
-	// Process immediately if the task is due
-	if task.RetryAfterTime.Before(time.Now()) {
-		q.execMu.Lock()
-		if q.executingTasks[task.GetTaskID()] {
-			q.execMu.Unlock()
-			return nil
+	// Try to acquire a worker slot
+	select {
+	case q.workerPool <- struct{}{}:
+		// Process immediately if the task is due
+		if task.RetryAfterTime.Before(time.Now()) {
+			q.execMu.Lock()
+			if q.executingTasks[task.GetTaskID()] {
+				q.execMu.Unlock()
+				<-q.workerPool
+				return nil
 		}
 		q.executingTasks[task.GetTaskID()] = true
 		q.execMu.Unlock()
@@ -263,6 +307,11 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 				atomic.AddInt64(&q.totalDequeued, 1)
 			}
 		}()
+	} else {
+		<-q.workerPool
+	}
+	default:
+		// Pool is saturated, let processDueTasks handle it when a slot frees up
 	}
 
 	return nil
@@ -298,14 +347,32 @@ func (q *AnyQueue) ProcessDueTasks() {
 
 	fmt.Printf("Found %d due tasks\n", len(tasks))
 
-	// Step 2: Process each due task
-	for _, t := range tasks {
+	// Step 2: Construct PriorityQueue (Max-Heap)
+	pq := make(PriorityQueue, len(tasks))
+	for i, t := range tasks {
+		pq[i] = t
+	}
+	heap.Init(&pq)
+
+	available := cap(q.workerPool) - len(q.workerPool)
+	if available <= 0 {
+		return
+	}
+
+	// Step 3: Process due tasks in priority order up to available limit
+	for i := 0; i < available && pq.Len() > 0; i++ {
+		t := heap.Pop(&pq).(*RetryableTask)
+		
+		// Wait for a worker slot
+		q.workerPool <- struct{}{}
+
 		// Convert RetryableTask to SnerdTask for execution
 		snerdTask := FromRetryableTask(t)
 
 		// Skip tasks with missing type or parameters
 		if snerdTask.TaskType == "" {
 			fmt.Printf("Skipping task %s: missing task type\n", snerdTask.GetTaskID())
+			<-q.workerPool
 			continue
 		}
 
@@ -332,6 +399,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 				if q.fileStore != nil {
 					q.fileStore.UpdateTaskRetryConfig(snerdTask.GetTaskID(), fmt.Errorf("rate_limit_exceeded"))
 				}
+				<-q.workerPool
 				continue
 			}
 		}
@@ -339,6 +407,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 		q.execMu.Lock()
 		if q.executingTasks[snerdTask.GetTaskID()] {
 			q.execMu.Unlock()
+			<-q.workerPool
 			continue
 		}
 		q.executingTasks[snerdTask.GetTaskID()] = true
@@ -349,6 +418,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 				q.execMu.Lock()
 				delete(q.executingTasks, snerdTask.GetTaskID())
 				q.execMu.Unlock()
+				<-q.workerPool
 			}()
 			
 			err := handler(snerdTask.Parameters)
