@@ -36,6 +36,7 @@ type RetryableTask struct {
 	LastJobError *JobErrorReturn
 	ExecuteAt    time.Time  `json:"executeAt"`
 	CronExpr     *string    `json:"cronExpression,omitempty"`
+	WebhookUrl   *string    `json:"webhookUrl,omitempty"`
 	CreatedAt    time.Time  `json:"-"`
 	UpdatedAt    time.Time  `json:"-"`
 	DeletedAt    *time.Time `json:"deletedAt,omitempty"`

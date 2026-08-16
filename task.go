@@ -1,9 +1,11 @@
 package snerd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -132,6 +134,7 @@ type SnerdTask struct {
 
 	ExecuteAt time.Time `json:"executeAt"`
 	CronExpr  *string   `json:"cronExpression,omitempty"`
+	WebhookUrl *string  `json:"webhookUrl,omitempty"`
 
 	// Timestamps for record-keeping
 	CreatedAt time.Time  `json:"-"`                   // When the task was created
@@ -147,7 +150,7 @@ func NewSnerdTask(
 	maxRetries int,
 	retryAfterHours float64,
 ) (*SnerdTask, error) {
-	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil, nil, nil)
+	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // NewSnerdTaskAdvanced creates a new task with advanced parameters
@@ -163,6 +166,7 @@ func NewSnerdTaskAdvanced(
 	urgencyScore *float64,
 	executeAtOpt *string,
 	cronOpt *string,
+	webhookUrl *string,
 ) (*SnerdTask, error) {
 	paramJSON, err := json.Marshal(parameters)
 	if err != nil {
@@ -210,6 +214,7 @@ func NewSnerdTaskAdvanced(
 		UrgencyScore:    urgencyScore,
 		ExecuteAt:       executeAt,
 		CronExpr:        parsedCron,
+		WebhookUrl:      webhookUrl,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
@@ -257,8 +262,12 @@ func (t *SnerdTask) GetRetryAfterHours() float64 {
 
 // Execute runs the task by invoking the registered handler
 func (t *SnerdTask) Execute() error {
-	// Log execution for debugging
 	fmt.Printf("Executing SnerdTask: ID=%s, Type=%s\n", t.TaskID, t.TaskType)
+
+	// If a webhook URL is set, dispatch via HTTP instead of a local handler
+	if t.WebhookUrl != nil && *t.WebhookUrl != "" {
+		return dispatchWebhook(*t.WebhookUrl, t.TaskID, t.TaskType, t.Parameters, "Execute")
+	}
 
 	// Get the handler for this task type
 	handlersMutex.RLock()
@@ -269,31 +278,58 @@ func (t *SnerdTask) Execute() error {
 		return fmt.Errorf("no handler registered for task type: %s", t.TaskType)
 	}
 
-	// Log parameter info for debugging
 	if t.Parameters == "" {
 		fmt.Printf("Warning: Empty parameters for task %s\n", t.TaskID)
 	} else if !strings.HasPrefix(t.Parameters, "{") {
 		fmt.Printf("Warning: Non-JSON parameters for task %s: %s\n", t.TaskID, t.Parameters)
 	}
 
-	// Execute the task handler with the parameters
 	return handler(t.Parameters)
 }
 
-// OnMaxRetryReached is called when the task reaches its maximum retry count
 func (t *SnerdTask) OnMaxRetryReached(contextProvider func() interface{}) error {
+	// If a webhook URL is set, fire the DLQ event via HTTP
+	if t.WebhookUrl != nil && *t.WebhookUrl != "" {
+		// Fire-and-forget DLQ webhook
+		go dispatchWebhook(*t.WebhookUrl, t.TaskID, t.TaskType, t.Parameters, "MaxRetriesReached") //nolint:errcheck
+		return nil
+	}
+
 	handlersMutex.RLock()
 	handler, exists := maxRetryHandlers[t.TaskType]
 	handlersMutex.RUnlock()
 
 	if !exists || handler == nil {
-		// Default behavior if no handler is registered
 		fmt.Printf("Task %s (type=%s) reached max retries with no handler\n", t.TaskID, t.TaskType)
 		return nil
 	}
 
-	// Execute the max retry handler
 	return handler(t.Parameters)
+}
+
+// dispatchWebhook sends a structured HTTP POST to a webhook URL
+func dispatchWebhook(url, taskID, taskType, data, event string) error {
+	payload := map[string]string{
+		"taskId":   taskID,
+		"taskType": taskType,
+		"data":     data,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("webhook: failed to build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-SnerdMQ-Event", event)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("webhook: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("webhook: non-2xx response: %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // UpdateRetryConfig updates the retry configuration after a failed execution
@@ -334,6 +370,7 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 		UrgencyScore:    t.UrgencyScore,
 		ExecuteAt:       t.ExecuteAt,
 		CronExpr:        t.CronExpr,
+		WebhookUrl:      t.WebhookUrl,
 		EmbeddedTask:    t,
 		DeletedAt:       t.DeletedAt,
 		CreatedAt:       t.CreatedAt,
@@ -367,6 +404,7 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		LastJobError:    rt.LastJobError,
 		ExecuteAt:       rt.ExecuteAt,
 		CronExpr:        rt.CronExpr,
+		WebhookUrl:      rt.WebhookUrl,
 		CreatedAt:       rt.CreatedAt,
 		UpdatedAt:       rt.UpdatedAt,
 		DeletedAt:       rt.DeletedAt,
