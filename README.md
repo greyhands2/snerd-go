@@ -103,6 +103,8 @@ func main() {
 		&maxPerMinute,      // Max requests per minute
 		&autoDedupe,        // Auto-deduplication
 		&urgencyScore,      // Urgency score (float higher)
+		nil,                // Execute At timestamp
+		func() *string { s := "1h"; return &s }(), // Cron: Runs every 1 hour!
 	)
 	
 	queue.Enqueue(task)
