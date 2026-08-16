@@ -28,7 +28,7 @@ type FileStore struct {
 // It rebuilds metadata from the existing log file if present.
 func NewFileStore(path string) (*FileStore, error) {
 	fs := &FileStore{
-		filePath: path,
+		filePath:   path,
 		tasksCache: make(map[string]*RetryableTask),
 	}
 
@@ -157,9 +157,9 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	defer fs.mu.Unlock()
 
 	var tasks []*RetryableTask
-	now := time.Now()
+	now := time.Now().UTC()
 	for _, t := range fs.tasksCache {
-		if t.RetryAfterTime.Before(now) || t.RetryAfterTime.Equal(now) {
+		if (t.RetryAfterTime.Before(now) || t.RetryAfterTime.Equal(now)) && (t.ExecuteAt.Before(now) || t.ExecuteAt.Equal(now)) {
 			taskCopy := *t
 			tasks = append(tasks, &taskCopy)
 		}
@@ -172,7 +172,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, taskErr error) error {
 	if err != nil {
 		return err
 	}
-	
+
 	task.RetryCount++
 	retryHours := task.RetryAfterHours
 	if retryHours <= 0 {
@@ -200,7 +200,7 @@ func (fs *FileStore) UpdateTaskRetryConfig(taskID string, taskErr error) error {
 func (fs *FileStore) GetLatestTask(taskID string) (*RetryableTask, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	
+
 	if task, exists := fs.tasksCache[taskID]; exists {
 		taskCopy := *task
 		return &taskCopy, nil
@@ -210,13 +210,13 @@ func (fs *FileStore) GetLatestTask(taskID string) (*RetryableTask, error) {
 
 func (fs *FileStore) DeleteTask(taskID string) error {
 	fs.mu.Lock()
-	
+
 	task, exists := fs.tasksCache[taskID]
 	if !exists {
 		fs.mu.Unlock()
 		return nil
 	}
-	
+
 	taskCopy := *task
 	fs.mu.Unlock()
 

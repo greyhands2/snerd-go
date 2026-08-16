@@ -34,6 +34,8 @@ type RetryableTask struct {
 	// Fields to store error information for OnMaxRetryReached
 	LastErrorObj error
 	LastJobError *JobErrorReturn
+	ExecuteAt    time.Time  `json:"executeAt"`
+	CronExpr     *string    `json:"cronExpression,omitempty"`
 	CreatedAt    time.Time  `json:"-"`
 	UpdatedAt    time.Time  `json:"-"`
 	DeletedAt    *time.Time `json:"deletedAt,omitempty"`
@@ -100,6 +102,8 @@ func (t *RetryableTask) MarshalJSON() ([]byte, error) {
 		TaskType        string          `json:"taskType"`
 		LastErrorObj    error           `json:"LastErrorObj"`
 		LastJobError    *JobErrorReturn `json:"LastJobError"`
+		ExecuteAt       time.Time       `json:"executeAt"`
+		CronExpr        *string         `json:"cronExpression,omitempty"`
 	}
 
 	// Before serializing, ensure TaskData has the latest data from EmbeddedTask
@@ -125,6 +129,8 @@ func (t *RetryableTask) MarshalJSON() ([]byte, error) {
 		TaskType:        t.TaskType,
 		LastErrorObj:    t.LastErrorObj,
 		LastJobError:    t.LastJobError,
+		ExecuteAt:       t.ExecuteAt,
+		CronExpr:        t.CronExpr,
 	}
 
 	// Standard json.Marshal produces compact JSON without indentation or newlines
@@ -145,6 +151,8 @@ func (t *RetryableTask) UnmarshalJSON(data []byte) error {
 		TaskType        string          `json:"taskType"`
 		LastErrorObj    error           `json:"LastErrorObj"`
 		LastJobError    *JobErrorReturn `json:"LastJobError"`
+		ExecuteAt       time.Time       `json:"executeAt"`
+		CronExpr        *string         `json:"cronExpression,omitempty"`
 	}
 
 	// Unmarshal into our temporary struct
@@ -163,6 +171,8 @@ func (t *RetryableTask) UnmarshalJSON(data []byte) error {
 	t.TaskType = alias.TaskType
 	t.LastErrorObj = alias.LastErrorObj
 	t.LastJobError = alias.LastJobError
+	t.ExecuteAt = alias.ExecuteAt
+	t.CronExpr = alias.CronExpr
 
 	// We'll reconstruct the EmbeddedTask when Execute is called, not here
 	t.EmbeddedTask = nil
@@ -419,6 +429,7 @@ func CreateTaskWithPayload[P any](
 		RetryAfterTime:  retryAfterTime,
 		TaskData:        data,
 		TaskType:        taskType,
+		ExecuteAt:       time.Now().UTC(),
 	}
 	if err := task.Save(); err != nil {
 		return nil, err
