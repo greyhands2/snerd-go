@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/robfig/cron/v3"
 )
 
 // Task represents a unit of work that can be processed by the queue system.
@@ -120,15 +121,17 @@ type SnerdTask struct {
 	TaskType   string `json:"taskType"`   // Type of task (maps to registered handler)
 	Parameters string `json:"parameters"` // JSON-encoded parameters for the task
 
-	RateLimitGroup *string `json:"rate_limit_group,omitempty"`
-	MaxPerMinute   *int    `json:"max_per_minute,omitempty"`
-	AutoDedupe     *bool   `json:"autoDedupe,omitempty"`
-	PayloadHash    *string `json:"payloadHash,omitempty"`
+	RateLimitGroup *string  `json:"rate_limit_group,omitempty"`
+	MaxPerMinute   *int     `json:"max_per_minute,omitempty"`
+	AutoDedupe     *bool    `json:"autoDedupe,omitempty"`
+	PayloadHash    *string  `json:"payloadHash,omitempty"`
 	UrgencyScore   *float64 `json:"urgency_score,omitempty"`
 
-	// Error Tracking
 	LastErrorObj error           `json:"lastErrorObj"` // Last error that occurred
 	LastJobError *JobErrorReturn `json:"lastJobError"` // Detailed error information
+
+	ExecuteAt time.Time `json:"executeAt"`
+	CronExpr  *string   `json:"cronExpression,omitempty"`
 
 	// Timestamps for record-keeping
 	CreatedAt time.Time  `json:"-"`                   // When the task was created
@@ -144,7 +147,7 @@ func NewSnerdTask(
 	maxRetries int,
 	retryAfterHours float64,
 ) (*SnerdTask, error) {
-	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil)
+	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil, nil, nil)
 }
 
 // NewSnerdTaskAdvanced creates a new task with advanced parameters
@@ -158,6 +161,8 @@ func NewSnerdTaskAdvanced(
 	maxPerMinute *int,
 	autoDedupe *bool,
 	urgencyScore *float64,
+	executeAtOpt *string,
+	cronOpt *string,
 ) (*SnerdTask, error) {
 	paramJSON, err := json.Marshal(parameters)
 	if err != nil {
@@ -171,7 +176,26 @@ func NewSnerdTaskAdvanced(
 		payloadHash = &hashStr
 	}
 
-	return &SnerdTask{
+	now := time.Now().UTC()
+	executeAt := now
+
+	var parsedCron *string
+	if cronOpt != nil && *cronOpt != "" {
+		p := parseCronSyntax(*cronOpt)
+		parsedCron = &p
+	}
+
+	if executeAtOpt != nil && *executeAtOpt != "" {
+		if parsedTime, err := time.Parse(time.RFC3339, *executeAtOpt); err == nil {
+			executeAt = parsedTime.UTC()
+		}
+	} else if parsedCron != nil {
+		// Initialize to the first cron tick if no explicit executeAt is provided
+		importCronParser := true
+		_ = importCronParser
+	}
+
+	task := &SnerdTask{
 		TaskID:          taskID,
 		TaskType:        taskType,
 		Parameters:      string(paramJSON),
@@ -184,9 +208,22 @@ func NewSnerdTaskAdvanced(
 		AutoDedupe:      autoDedupe,
 		PayloadHash:     payloadHash,
 		UrgencyScore:    urgencyScore,
+		ExecuteAt:       executeAt,
+		CronExpr:        parsedCron,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
-	}, nil
+	}
+
+	// Set initial cron executeAt if needed
+	if executeAtOpt == nil || *executeAtOpt == "" {
+		if parsedCron != nil {
+			parser := cronParser()
+			if sched, err := parser.Parse(*parsedCron); err == nil {
+				task.ExecuteAt = sched.Next(time.Now().UTC())
+			}
+		}
+	}
+	return task, nil
 }
 
 // GetTaskID returns the task ID
@@ -295,6 +332,8 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 		AutoDedupe:      t.AutoDedupe,
 		PayloadHash:     t.PayloadHash,
 		UrgencyScore:    t.UrgencyScore,
+		ExecuteAt:       t.ExecuteAt,
+		CronExpr:        t.CronExpr,
 		EmbeddedTask:    t,
 		DeletedAt:       t.DeletedAt,
 		CreatedAt:       t.CreatedAt,
@@ -326,6 +365,8 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		UrgencyScore:    rt.UrgencyScore,
 		LastErrorObj:    rt.LastErrorObj,
 		LastJobError:    rt.LastJobError,
+		ExecuteAt:       rt.ExecuteAt,
+		CronExpr:        rt.CronExpr,
 		CreatedAt:       rt.CreatedAt,
 		UpdatedAt:       rt.UpdatedAt,
 		DeletedAt:       rt.DeletedAt,
@@ -389,4 +430,45 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 	}
 
 	return task
+}
+
+func parseCronSyntax(input string) string {
+	input = strings.TrimSpace(input)
+
+	// Shorthands
+	if strings.HasSuffix(input, "s") {
+		var num int
+		if _, err := fmt.Sscanf(input, "%ds", &num); err == nil {
+			return fmt.Sprintf("*/%d * * * * *", num)
+		}
+	}
+	if strings.HasSuffix(input, "m") {
+		var num int
+		if _, err := fmt.Sscanf(input, "%dm", &num); err == nil {
+			return fmt.Sprintf("0 */%d * * * *", num)
+		}
+	}
+	if strings.HasSuffix(input, "h") {
+		var num int
+		if _, err := fmt.Sscanf(input, "%dh", &num); err == nil {
+			return fmt.Sprintf("0 0 */%d * * *", num)
+		}
+	}
+	if strings.HasSuffix(input, "d") {
+		var num int
+		if _, err := fmt.Sscanf(input, "%dd", &num); err == nil {
+			return fmt.Sprintf("0 0 0 */%d * *", num)
+		}
+	}
+
+	parts := strings.Fields(input)
+	if len(parts) == 5 {
+		return "0 " + input
+	}
+
+	return input
+}
+
+func cronParser() cron.Parser {
+	return cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 }
