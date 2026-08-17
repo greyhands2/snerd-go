@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/Designer-9.png" height="120" alt="Snerd-Go Logo" />
-  <h1>⚙️ snerd-go v1.0.2</h1>
+  <h1>⚙️ snerd-go v0.2.2</h1>
   <p>A blazingly fast, brutally simple, zero-dependency embedded background job engine for Go.</p>
 
   [![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
@@ -14,7 +14,7 @@ No databases. No external daemons. No nonsense.
 
 ---
 
-## 🔥 v1.0.2 AI Features
+## 🔥 v0.2.2 AI Features
 * **Zero External Infrastructure**: You don't need a Redis cluster. Your tasks are persisted directly to `.snerdata/tasks/tasks.log` using standard filesystem I/O.
 * **Bulletproof File Locks**: Safely scales across multiple processes! We utilize OS-level file-locking boundaries to guarantee that your tasks are never corrupted.
 * **Smart API Rate-Limiting**: Natively tracks `rateLimitGroup` execution velocity to prevent 429 "Too Many Requests" API errors.
@@ -106,7 +106,7 @@ func main() {
 
 ---
 
-### ⚙️ Advanced Task Configuration (v1.0.2)
+### ⚙️ Advanced Task Configuration (v0.2.2)
 To power complex AI workflows, tasks can now be configured with advanced orchestration parameters via `NewSnerdTaskAdvanced`:
 
 | Parameter | Type | Default | Description |
