@@ -256,8 +256,18 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 					delete(q.executingTasks, task.GetTaskID())
 					q.execMu.Unlock()
 				}()
+				// Create context
+				var ctx context.Context
+				var cancel context.CancelFunc
+				if task.MaxExecutionSeconds != nil {
+					ctx, cancel = context.WithTimeout(context.Background(), time.Duration(*task.MaxExecutionSeconds)*time.Second)
+				} else {
+					ctx, cancel = context.WithCancel(context.Background())
+				}
+				defer cancel()
+				
 				// Execute the task
-				if err := task.Execute(); err != nil {
+				if err := task.Execute(ctx); err != nil {
 					// Update retry configuration if we haven't exceeded max retries
 					fmt.Println("THERE WAS AN ERROR", task.RetryCount, task.MaxRetries)
 					if task.RetryCount < task.MaxRetries {
@@ -283,7 +293,7 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 						}
 					} else {
 						// Task reached max retries
-						if callbackErr := task.OnMaxRetryReached(nil); callbackErr != nil {
+						if callbackErr := task.OnMaxRetryReached(ctx, nil); callbackErr != nil {
 							fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
 						}
 
@@ -340,8 +350,11 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 }
 
 func (q *AnyQueue) processTask(task Task) {
+	// Create context (default empty context since this is an internal bypass)
+	ctx := context.Background()
+	
 	// Just execute the task directly
-	if err := task.Execute(); err != nil {
+	if err := task.Execute(ctx); err != nil {
 		fmt.Printf("error executing task: %v\n", err)
 	}
 }
@@ -456,7 +469,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 		q.executingTasks[snerdTask.GetTaskID()] = true
 		q.execMu.Unlock()
 
-		go func(snerdTask *SnerdTask, handler func(string) error) {
+		go func(snerdTask *SnerdTask, handler func(context.Context, string) error) {
 			defer func() {
 				q.execMu.Lock()
 				delete(q.executingTasks, snerdTask.GetTaskID())
@@ -464,7 +477,16 @@ func (q *AnyQueue) ProcessDueTasks() {
 				<-q.workerPool
 			}()
 
-			err := handler(snerdTask.Parameters)
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if snerdTask.MaxExecutionSeconds != nil {
+				ctx, cancel = context.WithTimeout(context.Background(), time.Duration(*snerdTask.MaxExecutionSeconds)*time.Second)
+			} else {
+				ctx, cancel = context.WithCancel(context.Background())
+			}
+			defer cancel()
+
+			err := handler(ctx, snerdTask.Parameters)
 			if err != nil {
 				fmt.Println("Error executing the TASK!!!!")
 				// Task failed execution
@@ -518,7 +540,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 						return err
 					}
 					// Pass the context provider to OnMaxRetryReached
-					if callbackErr := snerdTask.OnMaxRetryReached(contextProvider); callbackErr != nil {
+					if callbackErr := snerdTask.OnMaxRetryReached(ctx, contextProvider); callbackErr != nil {
 						fmt.Printf("Error executing OnMaxRetryReached: %v\n", callbackErr)
 					}
 

@@ -44,10 +44,10 @@ type RetryableTask struct {
 	EmbeddedTask Task `json:"-"`
 }
 
-func (t *RetryableTask) Execute() error {
+func (t *RetryableTask) Execute(ctx context.Context) error {
 	// If we have an embedded task, delegate execution to it
 	if t.EmbeddedTask != nil {
-		return t.EmbeddedTask.Execute()
+		return t.EmbeddedTask.Execute(ctx)
 	}
 
 	// No embedded task, try to execute using the registered task handler directly
@@ -62,7 +62,7 @@ func (t *RetryableTask) Execute() error {
 			snerdTask := FromRetryableTask(t)
 
 			// Execute the task with its parameters
-			return handler(snerdTask.Parameters)
+			return handler(ctx, snerdTask.Parameters)
 		}
 
 		// Fallback to legacy factory approach
@@ -74,7 +74,7 @@ func (t *RetryableTask) Execute() error {
 				// Successfully reconstructed the task
 				t.EmbeddedTask = concreteTask
 				// Execute the reconstructed task
-				return t.EmbeddedTask.Execute()
+				return t.EmbeddedTask.Execute(ctx)
 			}
 		}
 	}

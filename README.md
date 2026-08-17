@@ -79,6 +79,7 @@ func main() {
 	urgencyScore := 0.95
 	cronStr := "1h"
 	webhookUrl := "https://api.example.com/webhook"
+	maxExecutionSeconds := 300
 
 	task, _ := snerd.NewSnerdTaskAdvanced(
 		"unique-task-id-123",  // Unique task ID
@@ -93,6 +94,7 @@ func main() {
 		nil,                   // Execute at timestamp
 		&cronStr,              // Cron: Runs every 1 hour!
 		&webhookUrl,           // Webhook URL
+		&maxExecutionSeconds,  // Max Execution Seconds
 	)
 
 	queue.Enqueue(task)
@@ -107,13 +109,19 @@ func main() {
 ### ⚙️ Advanced Task Configuration (v1.0.2)
 To power complex AI workflows, tasks can now be configured with advanced orchestration parameters via `NewSnerdTaskAdvanced`:
 
-* **`autoDedupe` (`*bool`)**: If set to `true`, the daemon computes a cryptographic hash of the `taskType` and `parameters`. If an identical payload is currently sitting in the queue pending execution, this new task is silently dropped. Excellent for preventing duplicate generative AI requests from trigger-happy users!
-* **`urgencyScore` (`*float64`)**: A value (e.g. `0.99`) used to bypass the standard FIFO queue. SnerdMQ uses a true Binary Max-Heap to continually float tasks with the highest urgency score to the very front of the execution line. Standard tasks default to `0.0`.
-* **`rateLimitGroup` (`*string`)**: A custom string (e.g. `"openai_api"` or `"db_writes"`) that groups tasks together for backpressure control.
-* **`maxPerMinute` (`*int`)**: Used in conjunction with `rateLimitGroup`. If the queue processes more tasks in this group than the allowed limit within a 60-second rolling window, further tasks in this group are temporarily paused. This natively prevents 429 "Too Many Requests" errors when bursting third-party APIs.
-* **`executeAt` (`*time.Time` | `*string`)**: A timestamp of when the job should be executed in the future.
-* **`cron` (`*string`)**: A cron expression (e.g. `"0 * * * *"`) for recurring jobs. Shorthands like `"2h"` or `"10m"` are also supported.
-* **`webhookUrl` (`*string`)**: By providing a webhook URL, SnerdQueue will completely bypass your local Go handlers and dispatch the task payload via an HTTP POST request directly to the specified URL.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `autoDedupe` | `*bool` | `nil` | If set to `true`, the daemon computes a cryptographic hash of the `taskType` and `parameters`. If an identical payload is pending execution, this new task is silently dropped. |
+| `urgencyScore` | `*float64` | `nil` | A value (e.g. `0.99`) used to bypass the standard FIFO queue. SnerdMQ uses a true Binary Max-Heap to float high urgency tasks to the front. |
+| `rateLimitGroup` | `*string` | `nil` | A custom string (e.g. `"openai_api"`) that groups tasks together for backpressure control. |
+| `maxPerMinute` | `*int` | `nil` | Used in conjunction with `rateLimitGroup` to prevent 429 "Too Many Requests" errors. |
+| `executeAt` | `*time.Time` \| `*string` | `nil` | A timestamp of when the job should be executed in the future. |
+| `cron` | `*string` | `nil` | A cron expression (e.g. `"0 * * * *"`, `"2h"`) for recurring jobs. |
+| `webhookUrl` | `*string` | `nil` | Optional webhook URL to send the payload to instead of executing locally. |
+| `maxExecutionSeconds` | `*int` | `nil` | Optional hard timeout in seconds. If execution takes longer, the worker forcefully kills it via context cancellation. |
+
+### Note on Hard Timeouts (`maxExecutionSeconds`)
+When `maxExecutionSeconds` is provided, the Go engine executes your handler with a `context.WithTimeout`. If the task takes longer than the timeout, the context is cancelled. If your handler respects context cancellation, it will terminate early and the execution will be marked as failed.
 
 ### 🌐 HTTP Webhooks (Serverless Execution)
 You can configure a task to execute externally via an HTTP POST request. By setting a `webhookUrl`, the internal background processor will skip any registered handlers (`snerd.RegisterTaskHandler`) and directly invoke the HTTP endpoint.
@@ -125,6 +133,9 @@ When using the new scheduling features, it is important to understand the differ
 > - **A Cron Job** is a *Repeatable Job* that executes again **only after a success**, on a fixed schedule.
 > - **A Retryable Job** is a *Recovery Job* that executes again **only after a failure**, attempting to recover using the `retryAfterHours` backoff.
 > - **Combined:** If a Cron Job fails, it temporarily uses `retryAfterHours` to retry until it recovers. Once it succeeds, it goes back to ticking on its standard cron schedule!
+
+### ☠️ Dead Letter Queue (Handling Permanent Failures)
+The DLQ captures tasks that have exhausted all `maxRetries`. You can define a custom handler using `snerd.RegisterMaxRetryHandler`. This is critical for alerting or manual intervention when a background process consistently fails.
 
 ## 🧠 Architecture Details
 
