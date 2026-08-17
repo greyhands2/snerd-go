@@ -21,20 +21,20 @@ type Task interface {
 	// GetRetryCount returns the number of times this task has been retried.
 	GetRetryCount() int
 	// Execute runs the task's logic. Return an error if the task fails and should be retried.
-	Execute() error
+	Execute(ctx context.Context) error
 }
 
 // TaskWithMaxRetryCallback allows a task to handle the case where it has reached its maximum number of retries.
 type TaskWithMaxRetryCallback interface {
 	// OnMaxRetryReached is called when the task reaches its maximum retry count.
-	OnMaxRetryReached(contextProvider func() interface{}) error
+	OnMaxRetryReached(ctx context.Context, contextProvider func() interface{}) error
 }
 
 // TaskHandler is a function that processes parameters to execute a task
-type TaskHandler func(parameters string) error
+type TaskHandler func(ctx context.Context, parameters string) error
 
 // OnMaxRetryHandler is a function that handles when a task reaches max retries
-type OnMaxRetryHandler func(parameters string) error
+type OnMaxRetryHandler func(ctx context.Context, parameters string) error
 
 // Global handler registry with mutex for thread safety
 var (
@@ -135,6 +135,7 @@ type SnerdTask struct {
 	ExecuteAt time.Time `json:"executeAt"`
 	CronExpr  *string   `json:"cronExpression,omitempty"`
 	WebhookUrl *string  `json:"webhookUrl,omitempty"`
+	MaxExecutionSeconds *int `json:"maxExecutionSeconds,omitempty"`
 
 	// Timestamps for record-keeping
 	CreatedAt time.Time  `json:"-"`                   // When the task was created
@@ -150,7 +151,7 @@ func NewSnerdTask(
 	maxRetries int,
 	retryAfterHours float64,
 ) (*SnerdTask, error) {
-	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil, nil, nil, nil)
+	return NewSnerdTaskAdvanced(taskID, taskType, parameters, maxRetries, retryAfterHours, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // NewSnerdTaskAdvanced creates a new task with advanced parameters
@@ -167,6 +168,7 @@ func NewSnerdTaskAdvanced(
 	executeAtOpt *string,
 	cronOpt *string,
 	webhookUrl *string,
+	maxExecutionSeconds *int,
 ) (*SnerdTask, error) {
 	paramJSON, err := json.Marshal(parameters)
 	if err != nil {
@@ -215,6 +217,7 @@ func NewSnerdTaskAdvanced(
 		ExecuteAt:       executeAt,
 		CronExpr:        parsedCron,
 		WebhookUrl:      webhookUrl,
+		MaxExecutionSeconds: maxExecutionSeconds,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
@@ -261,7 +264,7 @@ func (t *SnerdTask) GetRetryAfterHours() float64 {
 }
 
 // Execute runs the task by invoking the registered handler
-func (t *SnerdTask) Execute() error {
+func (t *SnerdTask) Execute(ctx context.Context) error {
 	fmt.Printf("Executing SnerdTask: ID=%s, Type=%s\n", t.TaskID, t.TaskType)
 
 	// If a webhook URL is set, dispatch via HTTP instead of a local handler
@@ -284,10 +287,10 @@ func (t *SnerdTask) Execute() error {
 		fmt.Printf("Warning: Non-JSON parameters for task %s: %s\n", t.TaskID, t.Parameters)
 	}
 
-	return handler(t.Parameters)
+	return handler(ctx, t.Parameters)
 }
 
-func (t *SnerdTask) OnMaxRetryReached(contextProvider func() interface{}) error {
+func (t *SnerdTask) OnMaxRetryReached(ctx context.Context, contextProvider func() interface{}) error {
 	// If a webhook URL is set, fire the DLQ event via HTTP
 	if t.WebhookUrl != nil && *t.WebhookUrl != "" {
 		// Fire-and-forget DLQ webhook
@@ -304,7 +307,7 @@ func (t *SnerdTask) OnMaxRetryReached(contextProvider func() interface{}) error 
 		return nil
 	}
 
-	return handler(t.Parameters)
+	return handler(ctx, t.Parameters)
 }
 
 // dispatchWebhook sends a structured HTTP POST to a webhook URL
@@ -371,6 +374,7 @@ func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 		ExecuteAt:       t.ExecuteAt,
 		CronExpr:        t.CronExpr,
 		WebhookUrl:      t.WebhookUrl,
+		MaxExecutionSeconds: t.MaxExecutionSeconds,
 		EmbeddedTask:    t,
 		DeletedAt:       t.DeletedAt,
 		CreatedAt:       t.CreatedAt,
@@ -405,6 +409,7 @@ func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 		ExecuteAt:       rt.ExecuteAt,
 		CronExpr:        rt.CronExpr,
 		WebhookUrl:      rt.WebhookUrl,
+		MaxExecutionSeconds: rt.MaxExecutionSeconds,
 		CreatedAt:       rt.CreatedAt,
 		UpdatedAt:       rt.UpdatedAt,
 		DeletedAt:       rt.DeletedAt,
