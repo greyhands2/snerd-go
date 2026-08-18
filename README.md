@@ -4,6 +4,7 @@
   <p>A blazingly fast, brutally simple, zero-infrastructure embedded background job engine for Go.</p>
 
   [![Go Reference](https://pkg.go.dev/badge/github.com/speed-nerd/snerd-go.svg)](https://pkg.go.dev/github.com/speed-nerd/snerd-go)
+  [![Docs](https://img.shields.io/badge/docs-speed--nerd.github.io-blue)](https://speed-nerd.github.io/docs/)
 </div>
 
 If you are tired of wrestling with heavy, bloated background job frameworks like Redis, Postgres tables, or RabbitMQ just to send a few emails in the background... well, you are in the right place.
