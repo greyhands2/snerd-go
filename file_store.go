@@ -95,6 +95,13 @@ func (fs *FileStore) RebuildMetaData() error {
 
 // CreateTask appends a new retryable task to the log file and updates internal counters.
 func (fs *FileStore) CreateTask(task *RetryableTask) error {
+	return fs.createTaskInner(task, true)
+}
+
+// createTaskInner is the internal save method with option to skip compaction check.
+// DeleteTask passes checkCompact=false to prevent compaction cascades when
+// many tasks complete concurrently.
+func (fs *FileStore) createTaskInner(task *RetryableTask, checkCompact bool) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -129,7 +136,7 @@ func (fs *FileStore) CreateTask(task *RetryableTask) error {
 		fs.tasksCache[task.TaskID] = &taskCopy
 	}
 
-	if fs.shouldCompact() {
+	if checkCompact && fs.shouldCompact() {
 		go func() {
 			if err := fs.Compact(); err != nil {
 				fmt.Printf("Error compacting file: %v\n", err)
@@ -159,6 +166,11 @@ func (fs *FileStore) ReadDueTasks() ([]*RetryableTask, error) {
 	var tasks []*RetryableTask
 	now := time.Now().UTC()
 	for _, t := range fs.tasksCache {
+		// Defense-in-depth: skip soft-deleted tasks even though they should
+		// already be evicted from the cache by createTaskInner.
+		if t.DeletedAt != nil && !t.DeletedAt.IsZero() {
+			continue
+		}
 		if (t.RetryAfterTime.Before(now) || t.RetryAfterTime.Equal(now)) && (t.ExecuteAt.Before(now) || t.ExecuteAt.Equal(now)) {
 			taskCopy := *t
 			tasks = append(tasks, &taskCopy)
@@ -224,7 +236,9 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	taskCopy.DeletedAt = &now
 	taskCopy.UpdatedAt = now
 
-	return fs.CreateTask(&taskCopy)
+	// Skip compaction check on delete to prevent cascading compaction
+	// when many tasks complete concurrently (which would empty the log).
+	return fs.createTaskInner(&taskCopy, false)
 }
 
 func (fs *FileStore) Compact() error {

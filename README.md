@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/Designer-9.png" height="120" alt="Snerd-Go Logo" />
-  <h1>⚙️ snerd-go v0.2.3</h1>
+  <h1>⚙️ snerd-go v0.2.4</h1>
   <p>A blazingly fast, brutally simple, zero-infrastructure embedded background job engine for Go.</p>
 
   [![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
