@@ -3,7 +3,7 @@
   <h1>⚙️ snerd-go v0.2.4</h1>
   <p>A blazingly fast, brutally simple, zero-infrastructure embedded background job engine for Go.</p>
 
-  [![Go Reference](https://pkg.go.dev/badge/github.com/greyhands2/snerd-go.svg)](https://pkg.go.dev/github.com/greyhands2/snerd-go)
+  [![Go Reference](https://pkg.go.dev/badge/github.com/speed-nerd/snerd-go.svg)](https://pkg.go.dev/github.com/speed-nerd/snerd-go)
 </div>
 
 If you are tired of wrestling with heavy, bloated background job frameworks like Redis, Postgres tables, or RabbitMQ just to send a few emails in the background... well, you are in the right place.
@@ -31,7 +31,7 @@ No databases. No external daemons. No nonsense.
 ## 📦 Installation
 
 ```bash
-go get github.com/greyhands2/snerd-go
+go get github.com/speed-nerd/snerd-go
 ```
 
 ---
@@ -48,7 +48,7 @@ import (
 	"fmt"
 	"time"
 
-	snerd "github.com/greyhands2/snerd-go"
+	snerd "github.com/speed-nerd/snerd-go"
 )
 
 func main() {

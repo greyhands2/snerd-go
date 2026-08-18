@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	snerd "github.com/greyhands2/snerd-go"
+	snerd "github.com/speed-nerd/snerd-go"
 )
 
 func main() {

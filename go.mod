@@ -1,4 +1,4 @@
-module github.com/greyhands2/snerd-go
+module github.com/speed-nerd/snerd-go
 
 go 1.25
 
