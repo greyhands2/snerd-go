@@ -2,6 +2,7 @@ package snerd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,10 +133,10 @@ type SnerdTask struct {
 	LastErrorObj error           `json:"lastErrorObj"` // Last error that occurred
 	LastJobError *JobErrorReturn `json:"lastJobError"` // Detailed error information
 
-	ExecuteAt time.Time `json:"executeAt"`
-	CronExpr  *string   `json:"cronExpression,omitempty"`
-	WebhookUrl *string  `json:"webhookUrl,omitempty"`
-	MaxExecutionSeconds *int `json:"maxExecutionSeconds,omitempty"`
+	ExecuteAt           time.Time `json:"executeAt"`
+	CronExpr            *string   `json:"cronExpression,omitempty"`
+	WebhookUrl          *string   `json:"webhookUrl,omitempty"`
+	MaxExecutionSeconds *int      `json:"maxExecutionSeconds,omitempty"`
 
 	// Timestamps for record-keeping
 	CreatedAt time.Time  `json:"-"`                   // When the task was created
@@ -202,24 +203,24 @@ func NewSnerdTaskAdvanced(
 	}
 
 	task := &SnerdTask{
-		TaskID:          taskID,
-		TaskType:        taskType,
-		Parameters:      string(paramJSON),
-		RetryCount:      0,
-		MaxRetries:      maxRetries,
-		RetryAfterHours: retryAfterHours,
-		RetryAfterTime:  time.Now(), // Make new tasks immediately due
-		RateLimitGroup:  rateLimitGroup,
-		MaxPerMinute:    maxPerMinute,
-		AutoDedupe:      autoDedupe,
-		PayloadHash:     payloadHash,
-		UrgencyScore:    urgencyScore,
-		ExecuteAt:       executeAt,
-		CronExpr:        parsedCron,
-		WebhookUrl:      webhookUrl,
+		TaskID:              taskID,
+		TaskType:            taskType,
+		Parameters:          string(paramJSON),
+		RetryCount:          0,
+		MaxRetries:          maxRetries,
+		RetryAfterHours:     retryAfterHours,
+		RetryAfterTime:      time.Now(), // Make new tasks immediately due
+		RateLimitGroup:      rateLimitGroup,
+		MaxPerMinute:        maxPerMinute,
+		AutoDedupe:          autoDedupe,
+		PayloadHash:         payloadHash,
+		UrgencyScore:        urgencyScore,
+		ExecuteAt:           executeAt,
+		CronExpr:            parsedCron,
+		WebhookUrl:          webhookUrl,
 		MaxExecutionSeconds: maxExecutionSeconds,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
 	}
 
 	// Set initial cron executeAt if needed
@@ -359,26 +360,26 @@ func (t *SnerdTask) UpdateRetryConfig(errorObj error) {
 func (t *SnerdTask) ToRetryableTask() *RetryableTask {
 	// Convert parameters to JSON string
 	return &RetryableTask{
-		TaskID:          t.TaskID,
-		RetryCount:      t.RetryCount,
-		MaxRetries:      t.MaxRetries,
-		RetryAfterHours: t.RetryAfterHours,
-		RetryAfterTime:  t.RetryAfterTime,
-		TaskData:        t.Parameters,
-		TaskType:        t.TaskType,
-		RateLimitGroup:  t.RateLimitGroup,
-		MaxPerMinute:    t.MaxPerMinute,
-		AutoDedupe:      t.AutoDedupe,
-		PayloadHash:     t.PayloadHash,
-		UrgencyScore:    t.UrgencyScore,
-		ExecuteAt:       t.ExecuteAt,
-		CronExpr:        t.CronExpr,
-		WebhookUrl:      t.WebhookUrl,
+		TaskID:              t.TaskID,
+		RetryCount:          t.RetryCount,
+		MaxRetries:          t.MaxRetries,
+		RetryAfterHours:     t.RetryAfterHours,
+		RetryAfterTime:      t.RetryAfterTime,
+		TaskData:            t.Parameters,
+		TaskType:            t.TaskType,
+		RateLimitGroup:      t.RateLimitGroup,
+		MaxPerMinute:        t.MaxPerMinute,
+		AutoDedupe:          t.AutoDedupe,
+		PayloadHash:         t.PayloadHash,
+		UrgencyScore:        t.UrgencyScore,
+		ExecuteAt:           t.ExecuteAt,
+		CronExpr:            t.CronExpr,
+		WebhookUrl:          t.WebhookUrl,
 		MaxExecutionSeconds: t.MaxExecutionSeconds,
-		EmbeddedTask:    t,
-		DeletedAt:       t.DeletedAt,
-		CreatedAt:       t.CreatedAt,
-		UpdatedAt:       t.UpdatedAt,
+		EmbeddedTask:        t,
+		DeletedAt:           t.DeletedAt,
+		CreatedAt:           t.CreatedAt,
+		UpdatedAt:           t.UpdatedAt,
 	}
 }
 
@@ -393,26 +394,26 @@ func CreateTask(taskID string, taskType string, parameters interface{}, maxRetri
 func FromRetryableTask(rt *RetryableTask) *SnerdTask {
 	// Create a new SnerdTask with the same core fields
 	task := &SnerdTask{
-		TaskID:          rt.TaskID,
-		RetryCount:      rt.RetryCount,
-		MaxRetries:      rt.MaxRetries,
-		RetryAfterHours: rt.RetryAfterHours,
-		RetryAfterTime:  rt.RetryAfterTime,
-		TaskType:        rt.TaskType,
-		RateLimitGroup:  rt.RateLimitGroup,
-		MaxPerMinute:    rt.MaxPerMinute,
-		AutoDedupe:      rt.AutoDedupe,
-		PayloadHash:     rt.PayloadHash,
-		UrgencyScore:    rt.UrgencyScore,
-		LastErrorObj:    rt.LastErrorObj,
-		LastJobError:    rt.LastJobError,
-		ExecuteAt:       rt.ExecuteAt,
-		CronExpr:        rt.CronExpr,
-		WebhookUrl:      rt.WebhookUrl,
+		TaskID:              rt.TaskID,
+		RetryCount:          rt.RetryCount,
+		MaxRetries:          rt.MaxRetries,
+		RetryAfterHours:     rt.RetryAfterHours,
+		RetryAfterTime:      rt.RetryAfterTime,
+		TaskType:            rt.TaskType,
+		RateLimitGroup:      rt.RateLimitGroup,
+		MaxPerMinute:        rt.MaxPerMinute,
+		AutoDedupe:          rt.AutoDedupe,
+		PayloadHash:         rt.PayloadHash,
+		UrgencyScore:        rt.UrgencyScore,
+		LastErrorObj:        rt.LastErrorObj,
+		LastJobError:        rt.LastJobError,
+		ExecuteAt:           rt.ExecuteAt,
+		CronExpr:            rt.CronExpr,
+		WebhookUrl:          rt.WebhookUrl,
 		MaxExecutionSeconds: rt.MaxExecutionSeconds,
-		CreatedAt:       rt.CreatedAt,
-		UpdatedAt:       rt.UpdatedAt,
-		DeletedAt:       rt.DeletedAt,
+		CreatedAt:           rt.CreatedAt,
+		UpdatedAt:           rt.UpdatedAt,
+		DeletedAt:           rt.DeletedAt,
 	}
 
 	// Improved parameter extraction with better handling of nested JSON structures

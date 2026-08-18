@@ -1,6 +1,7 @@
 package snerd
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -32,14 +33,15 @@ type RetryableTask struct {
 	PayloadHash     *string   `json:"payloadHash,omitempty"`
 	UrgencyScore    *float64  `json:"urgency_score,omitempty"`
 	// Fields to store error information for OnMaxRetryReached
-	LastErrorObj error
-	LastJobError *JobErrorReturn
-	ExecuteAt    time.Time  `json:"executeAt"`
-	CronExpr     *string    `json:"cronExpression,omitempty"`
-	WebhookUrl   *string    `json:"webhookUrl,omitempty"`
-	CreatedAt    time.Time  `json:"-"`
-	UpdatedAt    time.Time  `json:"-"`
-	DeletedAt    *time.Time `json:"deletedAt,omitempty"`
+	LastErrorObj        error
+	LastJobError        *JobErrorReturn
+	ExecuteAt           time.Time  `json:"executeAt"`
+	CronExpr            *string    `json:"cronExpression,omitempty"`
+	WebhookUrl          *string    `json:"webhookUrl,omitempty"`
+	MaxExecutionSeconds *int       `json:"maxExecutionSeconds,omitempty"`
+	CreatedAt           time.Time  `json:"-"`
+	UpdatedAt           time.Time  `json:"-"`
+	DeletedAt           *time.Time `json:"deletedAt,omitempty"`
 	// Embedded task object - this is the actual task that will be executed
 	EmbeddedTask Task `json:"-"`
 }
@@ -94,17 +96,20 @@ func (t *RetryableTask) GetRetryAfterHours() float64 { return t.RetryAfterHours 
 func (t *RetryableTask) MarshalJSON() ([]byte, error) {
 	// Create an Alias struct without the EmbeddedTask field to avoid infinite recursion
 	type Alias struct {
-		TaskID          string          `json:"taskId"`
-		RetryCount      int             `json:"retryCount"`
-		MaxRetries      int             `json:"maxRetries"`
-		RetryAfterHours float64         `json:"retryAfterHours"`
-		RetryAfterTime  time.Time       `json:"retryAfterTime"`
-		TaskData        string          `json:"taskData"`
-		TaskType        string          `json:"taskType"`
-		LastErrorObj    error           `json:"LastErrorObj"`
-		LastJobError    *JobErrorReturn `json:"LastJobError"`
-		ExecuteAt       time.Time       `json:"executeAt"`
-		CronExpr        *string         `json:"cronExpression,omitempty"`
+		TaskID              string          `json:"taskId"`
+		RetryCount          int             `json:"retryCount"`
+		MaxRetries          int             `json:"maxRetries"`
+		RetryAfterHours     float64         `json:"retryAfterHours"`
+		RetryAfterTime      time.Time       `json:"retryAfterTime"`
+		TaskData            string          `json:"taskData"`
+		TaskType            string          `json:"taskType"`
+		LastErrorObj        error           `json:"LastErrorObj"`
+		LastJobError        *JobErrorReturn `json:"LastJobError"`
+		ExecuteAt           time.Time       `json:"executeAt"`
+		CronExpr            *string         `json:"cronExpression,omitempty"`
+		WebhookUrl          *string         `json:"webhookUrl,omitempty"`
+		MaxExecutionSeconds *int            `json:"maxExecutionSeconds,omitempty"`
+		DeletedAt           *time.Time      `json:"deletedAt,omitempty"`
 	}
 
 	// Before serializing, ensure TaskData has the latest data from EmbeddedTask
@@ -121,17 +126,20 @@ func (t *RetryableTask) MarshalJSON() ([]byte, error) {
 	}
 
 	alias := Alias{
-		TaskID:          t.TaskID,
-		RetryCount:      t.RetryCount,
-		MaxRetries:      t.MaxRetries,
-		RetryAfterHours: t.RetryAfterHours,
-		RetryAfterTime:  t.RetryAfterTime,
-		TaskData:        t.TaskData,
-		TaskType:        t.TaskType,
-		LastErrorObj:    t.LastErrorObj,
-		LastJobError:    t.LastJobError,
-		ExecuteAt:       t.ExecuteAt,
-		CronExpr:        t.CronExpr,
+		TaskID:              t.TaskID,
+		RetryCount:          t.RetryCount,
+		MaxRetries:          t.MaxRetries,
+		RetryAfterHours:     t.RetryAfterHours,
+		RetryAfterTime:      t.RetryAfterTime,
+		TaskData:            t.TaskData,
+		TaskType:            t.TaskType,
+		LastErrorObj:        t.LastErrorObj,
+		LastJobError:        t.LastJobError,
+		ExecuteAt:           t.ExecuteAt,
+		CronExpr:            t.CronExpr,
+		WebhookUrl:          t.WebhookUrl,
+		MaxExecutionSeconds: t.MaxExecutionSeconds,
+		DeletedAt:           t.DeletedAt,
 	}
 
 	// Standard json.Marshal produces compact JSON without indentation or newlines
@@ -143,17 +151,20 @@ func (t *RetryableTask) MarshalJSON() ([]byte, error) {
 func (t *RetryableTask) UnmarshalJSON(data []byte) error {
 	// Use a temporary struct without the EmbeddedTask field to avoid infinite recursion
 	type Alias struct {
-		TaskID          string          `json:"taskId"`
-		RetryCount      int             `json:"retryCount"`
-		MaxRetries      int             `json:"maxRetries"`
-		RetryAfterHours float64         `json:"retryAfterHours"`
-		RetryAfterTime  time.Time       `json:"retryAfterTime"`
-		TaskData        string          `json:"taskData"`
-		TaskType        string          `json:"taskType"`
-		LastErrorObj    error           `json:"LastErrorObj"`
-		LastJobError    *JobErrorReturn `json:"LastJobError"`
-		ExecuteAt       time.Time       `json:"executeAt"`
-		CronExpr        *string         `json:"cronExpression,omitempty"`
+		TaskID              string          `json:"taskId"`
+		RetryCount          int             `json:"retryCount"`
+		MaxRetries          int             `json:"maxRetries"`
+		RetryAfterHours     float64         `json:"retryAfterHours"`
+		RetryAfterTime      time.Time       `json:"retryAfterTime"`
+		TaskData            string          `json:"taskData"`
+		TaskType            string          `json:"taskType"`
+		LastErrorObj        error           `json:"LastErrorObj"`
+		LastJobError        *JobErrorReturn `json:"LastJobError"`
+		ExecuteAt           time.Time       `json:"executeAt"`
+		CronExpr            *string         `json:"cronExpression,omitempty"`
+		WebhookUrl          *string         `json:"webhookUrl,omitempty"`
+		MaxExecutionSeconds *int            `json:"maxExecutionSeconds,omitempty"`
+		DeletedAt           *time.Time      `json:"deletedAt,omitempty"`
 	}
 
 	// Unmarshal into our temporary struct
@@ -174,6 +185,9 @@ func (t *RetryableTask) UnmarshalJSON(data []byte) error {
 	t.LastJobError = alias.LastJobError
 	t.ExecuteAt = alias.ExecuteAt
 	t.CronExpr = alias.CronExpr
+	t.WebhookUrl = alias.WebhookUrl
+	t.MaxExecutionSeconds = alias.MaxExecutionSeconds
+	t.DeletedAt = alias.DeletedAt
 
 	// We'll reconstruct the EmbeddedTask when Execute is called, not here
 	t.EmbeddedTask = nil

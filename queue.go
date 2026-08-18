@@ -3,6 +3,7 @@ package snerd
 import (
 	"container/heap"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -265,7 +266,7 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 					ctx, cancel = context.WithCancel(context.Background())
 				}
 				defer cancel()
-				
+
 				// Execute the task
 				if err := task.Execute(ctx); err != nil {
 					// Update retry configuration if we haven't exceeded max retries
@@ -352,7 +353,7 @@ func (q *AnyQueue) EnqueueSnerdTask(task *SnerdTask) error {
 func (q *AnyQueue) processTask(task Task) {
 	// Create context (default empty context since this is an internal bypass)
 	ctx := context.Background()
-	
+
 	// Just execute the task directly
 	if err := task.Execute(ctx); err != nil {
 		fmt.Printf("error executing task: %v\n", err)
@@ -446,8 +447,8 @@ func (q *AnyQueue) ProcessDueTasks() {
 			latestTask, err := q.fileStore.GetLatestTask(snerdTask.GetTaskID())
 			if err == nil && latestTask != nil {
 				now := time.Now().UTC()
-				if (!latestTask.ExecuteAt.IsZero() && latestTask.ExecuteAt.After(now)) || 
-				   (!latestTask.RetryAfterTime.IsZero() && latestTask.RetryAfterTime.After(now)) {
+				if (!latestTask.ExecuteAt.IsZero() && latestTask.ExecuteAt.After(now)) ||
+					(!latestTask.RetryAfterTime.IsZero() && latestTask.RetryAfterTime.After(now)) {
 					// Task is not due anymore
 					q.execMu.Unlock()
 					<-q.workerPool
@@ -688,7 +689,16 @@ func (q *AnyQueue) SubscribeProgress() <-chan string {
 
 // YieldProgress broadcasts a progress update to all subscribers.
 func (q *AnyQueue) YieldProgress(taskID string, data string) {
-	jsonStr := fmt.Sprintf(`{"action":"progress","task_id":"%s","data":"%s"}`, taskID, data)
+	// Marshal to ensure special characters in data are properly escaped
+	payload, err := json.Marshal(map[string]string{
+		"action":  "progress",
+		"task_id": taskID,
+		"data":    data,
+	})
+	if err != nil {
+		return
+	}
+	jsonStr := string(payload)
 	q.progressMu.Lock()
 	defer q.progressMu.Unlock()
 	for _, ch := range q.progressSubs {

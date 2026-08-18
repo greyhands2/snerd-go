@@ -1,6 +1,7 @@
 package snerd
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -9,16 +10,16 @@ import (
 func TestCronRescheduling(t *testing.T) {
 	// Setup queue
 	q := NewAnyQueue("cron-test-queue", 100, 100*time.Millisecond)
-	
+
 	// Track executions
 	executed := make(chan bool, 1)
-	
+
 	// Register handler
-	RegisterTaskHandler("cron-task", func(data string) error {
+	RegisterTaskHandler("cron-task", func(ctx context.Context, data string) error {
 		executed <- true
 		return nil
 	})
-	
+
 	// Create cron task
 	cronStr := "* * * * * *" // every second
 	task, err := NewSnerdTaskAdvanced(
@@ -34,21 +35,22 @@ func TestCronRescheduling(t *testing.T) {
 		nil,
 		&cronStr,
 		nil, // webhookUrl
+		nil, // maxExecutionSeconds
 	)
-	
+
 	if err != nil {
 		t.Fatalf("Failed to create task: %v", err)
 	}
-	
+
 	// Force it to be due now for testing
 	task.ExecuteAt = time.Now().UTC()
-	
+
 	// Enqueue
 	err = q.Enqueue(task)
 	if err != nil {
 		t.Fatalf("Failed to enqueue: %v", err)
 	}
-	
+
 	// Wait for execution
 	select {
 	case <-executed:
@@ -56,16 +58,16 @@ func TestCronRescheduling(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatalf("Cron task did not execute")
 	}
-	
+
 	// Wait for post-execution processing
 	time.Sleep(200 * time.Millisecond)
-	
+
 	// Verify it was rescheduled, not deleted
 	tasks, err := q.fileStore.ReadTasks()
 	if err != nil {
 		t.Fatalf("Failed to read tasks: %v", err)
 	}
-	
+
 	found := false
 	for _, stored := range tasks {
 		if stored.TaskID == "cron-task-1" {
@@ -79,11 +81,11 @@ func TestCronRescheduling(t *testing.T) {
 			break
 		}
 	}
-	
+
 	if !found {
 		t.Fatalf("Cron task was not found in filestore after execution")
 	}
-	
+
 	// Cleanup
 	q.StopProcessor()
 	os.RemoveAll("./.snerdata")
