@@ -54,7 +54,12 @@ import (
 
 func main() {
 	// 1. Create the Queue (name, max size, processor poll interval)
+	// For local development this persists to ./.snerdata/tasks/tasks.log
 	queue := snerd.NewAnyQueue("my-fast-queue", 10, 2*time.Second)
+
+	// Need a custom location instead? (durable network-drive storage, per-server
+	// isolation, or keeping tests out of .snerdata)
+	// queue := snerd.NewAnyQueueWithStorage("my-fast-queue", 10, 2*time.Second, "/var/data/snerd/tasks.log")
 
 	// 2. Register your Task Handler (the closure that does the actual work)
 	snerd.RegisterTaskHandler("generate_ai_image", func(ctx context.Context, parameters string) error {
@@ -158,6 +163,18 @@ When using the scheduling features, it is important to understand the difference
 ### ☠️ Dead Letter Queue (Handling Permanent Failures)
 The DLQ captures tasks that have exhausted all `maxRetries`. Define a custom handler with `snerd.RegisterMaxRetryHandler(taskType, handler)` — critical for alerting or manual intervention when a background process consistently fails.
 
+### 📁 Custom Storage Location
+By default, tasks persist to `.snerdata/tasks/tasks.log`. To use a different file — isolating queues per concern, pointing at a network drive (EFS/NFS) for durable storage, or keeping tests clean — use `NewAnyQueueWithStorage`:
+
+```go
+// Same semantics as NewAnyQueue, plus an explicit task log path
+queue := snerd.NewAnyQueueWithStorage("image-processing", 10, 2*time.Second, "/mnt/efs/image-jobs/tasks.log")
+```
+
+The rate limiter state file (`rate_limits.json`) is stored alongside the task log, so two queues on different paths are fully independent — including their dashboards.
+
+**One queue instance per storage file.** Each queue takes an exclusive OS-level lock on its task log (e.g. `tasks.log.lock`) at creation. A second queue on the same file fails fast with a panic instead of racing it and double-executing tasks — so register all your task types on a single queue, or give each queue its own path.
+
 ---
 
 ## 📊 Live Dashboard
@@ -213,9 +230,93 @@ for msg := range queue.SubscribeProgress() {
 
 ---
 
+## 🧩 Queue Topology: One Queue or Many?
+
+### ✅ Recommended: one queue, all job types (singleton)
+
+The recommended pattern is **one queue instance per application**: register every job type on it and serve a single shared dashboard:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	snerd "github.com/speed-nerd/snerd-go"
+)
+
+func main() {
+	// ONE queue for the whole app (persists to ./.snerdata/tasks/tasks.log)
+	queue := snerd.NewAnyQueue("main", 10, 2*time.Second)
+
+	// Job type #1: image processing
+	snerd.RegisterTaskHandler("process_image", func(ctx context.Context, data string) error {
+		fmt.Printf("Processing image: %s\n", data)
+		return nil
+	})
+
+	// Job type #2: OTP emails — same queue
+	snerd.RegisterTaskHandler("send_otp_email", func(ctx context.Context, data string) error {
+		fmt.Printf("Sending OTP: %s\n", data)
+		return nil
+	})
+
+	// Both job types flow through the exact same queue
+	imgTask, _ := snerd.NewSnerdTask("img-1", "process_image", map[string]string{"image_id": "abc123"}, 3, 0.5)
+	queue.EnqueueSnerdTask(imgTask)
+
+	otpTask, _ := snerd.NewSnerdTask("otp-1", "send_otp_email", map[string]string{"to": "john@wick.com"}, 3, 0.5)
+	queue.EnqueueSnerdTask(otpTask)
+
+	// ONE dashboard shows every job type
+	queue.StartDashboard(9090)
+
+	select {} // keep the process alive — jobs run in background goroutines
+}
+```
+
+All job types share everything: the same persistent job log, retry/DLQ pipeline, rate-limit state, stats — and one dashboard at `http://localhost:9090` showing all of them.
+
+### 🚫 Same storage twice = fails fast
+
+Each queue takes an **exclusive OS-level lock** on its task log at creation. A second queue on the same storage fails instead of silently double-executing your tasks:
+
+```go
+first := snerd.NewAnyQueue("main", 10, 2*time.Second)   // ✅ owns .snerdata/tasks/tasks.log
+second := snerd.NewAnyQueue("other", 10, 2*time.Second) // ❌ panics:
+// "[Snerd] ERROR: Another queue instance is already running on storage ..."
+```
+
+This applies across processes too — a second process pointed at the same log file also fails to start its queue.
+
+### 🔀 Need multiple queues? Give each one its own storage
+
+```go
+images := snerd.NewAnyQueueWithStorage("images", 10, 2*time.Second, "./.snerdata-images/tasks.log")
+emails := snerd.NewAnyQueueWithStorage("emails", 10, 500*time.Millisecond, "./.snerdata-emails/tasks.log")
+
+images.StartDashboard(9090) // separate dashboards, so separate ports
+emails.StartDashboard(9091)
+```
+
+Now you have two fully independent engines: separate job logs, separate rate-limit state, separate dashboards. Only split when you actually need isolation (different cadence, different retention, independent monitoring) — otherwise the singleton is simpler and recommended.
+
+---
+
 ## 🌍 Advanced: Distributed Scaling
 
-By default the queue persists to `.snerdata/tasks/tasks.log` in the working directory. If you have multiple Go servers behind a load balancer and want them to share the exact same queue, mount a **Shared Network Drive** (like AWS EFS or NFS) on all servers — OS-level file locking keeps concurrent writers safe.
+A queue instance exclusively owns its storage file: it takes an OS-level lock (`<tasks.log>.lock`) at creation and holds it for its lifetime. A second instance pointed at the same file — in the same process or on another server — fails fast instead of racing it and double-executing tasks.
+
+Scaling out therefore means **one queue per server**, each with its own storage. Your load balancer routes requests across servers, and every server processes the tasks it enqueued:
+
+```go
+// Each server runs its own queue on its own log file (local disk works fine)
+queue := snerd.NewAnyQueueWithStorage("worker-server-1", 10, 2*time.Second, "/var/data/snerd/tasks.log")
+```
+
+A shared network drive (AWS EFS or NFS) is still a good home for that log when a single instance needs durable storage — e.g. a container that restarts but must keep its queue state. OS-level file locking keeps writes safe — no Redis required.
 
 ---
 
@@ -223,7 +324,8 @@ By default the queue persists to `.snerdata/tasks/tasks.log` in the working dire
 
 | API | Description |
 |---|---|
-| `snerd.NewAnyQueue(args ...interface{})` | Create a queue. Variadic options: `string` = name (default `"default-queue"`), `int` = max size (default `100`), `time.Duration` = processor poll interval (default `10s`). Persists to `.snerdata/tasks/tasks.log`. |
+| `snerd.NewAnyQueue(args ...interface{})` | Create a queue. Variadic options: `string` = name (default `"default-queue"`), `int` = max size (default `100`), `time.Duration` = processor poll interval (default `10s`). Persists to `.snerdata/tasks/tasks.log`. Panics if another queue instance already owns that file. |
+| `snerd.NewAnyQueueWithStorage(name, maxSize, interval, storePath)` | Create a queue with an explicit task log file location instead of the default `.snerdata/tasks/tasks.log`. Panics if another queue instance already owns that file. |
 | `queue.EnqueueSnerdTask(task)` / `queue.Enqueue(task)` | Enqueue a task. Due tasks execute immediately in background goroutines; the rest are picked up by the processor loop. |
 | `snerd.RegisterTaskHandler(type, handler)` | Register `func(ctx context.Context, parameters string) error` for a task type. |
 | `snerd.RegisterMaxRetryHandler(type, handler)` | Register the Dead-Letter handler for a task type. |

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // AnyQueue is a thread-safe queue that manages SnerdTask execution, retry logic, and statistics
@@ -53,12 +55,15 @@ func (pq *PriorityQueue) Pop() interface{} {
 
 // AnyQueue is a thread-safe queue that manages SnerdTask execution, retry logic, and statistics
 type AnyQueue struct {
-	name            string
-	maxSize         int
-	mu              sync.Mutex
-	totalEnqueued   int64
-	totalDequeued   int64
-	fileStore       *FileStore
+	name          string
+	maxSize       int
+	mu            sync.Mutex
+	totalEnqueued int64
+	totalDequeued int64
+	fileStore     *FileStore
+	// storageLock holds an exclusive OS-level lock on the task log for the
+	// queue's lifetime, guaranteeing a single processor per storage file.
+	storageLock     *flock.Flock
 	rateLimiter     *RateLimiter
 	processorActive bool
 	processorCtx    context.Context
@@ -100,6 +105,35 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		case time.Duration:
 			processingInterval = v
 		}
+	}
+
+	return newAnyQueue(name, maxSize, taskStorePath, processingInterval)
+}
+
+// NewAnyQueueWithStorage creates a new queue that persists tasks to a custom
+// file location instead of the default ./.snerdata/tasks/tasks.log. This is
+// useful for isolating queues per concern, pointing at a shared network drive
+// (e.g. EFS/NFS) for cross-process queue sharing, or test isolation.
+func NewAnyQueueWithStorage(name string, maxSize int, processingInterval time.Duration, taskStorePath string) *AnyQueue {
+	return newAnyQueue(name, maxSize, taskStorePath, processingInterval)
+}
+
+// newAnyQueue is the shared constructor used by NewAnyQueue and
+// NewAnyQueueWithStorage.
+func newAnyQueue(name string, maxSize int, taskStorePath string, processingInterval time.Duration) *AnyQueue {
+	// Acquire exclusive ownership of the task log before anything else. Two
+	// processors on the same file would race and double-execute tasks, so a
+	// second queue on the same storage fails fast instead. The OS releases the
+	// lock automatically when the process exits.
+	if mkErr := os.MkdirAll(filepath.Dir(taskStorePath), 0755); mkErr != nil {
+		panic(fmt.Sprintf("[Snerd] ERROR: Could not create storage directory '%s': %v", filepath.Dir(taskStorePath), mkErr))
+	}
+	storageLock := flock.New(taskStorePath + ".lock")
+	locked, lockErr := storageLock.TryLock()
+	if lockErr != nil || !locked {
+		panic(fmt.Sprintf("[Snerd] ERROR: Another queue instance is already running on storage '%s'. "+
+			"Use a single queue instance per storage file (register all your task types on it), "+
+			"or use NewAnyQueueWithStorage with a different path. (lock file: %s.lock)", taskStorePath, taskStorePath))
 	}
 
 	// Initialize the file store
@@ -150,6 +184,7 @@ func NewAnyQueue(args ...interface{}) *AnyQueue {
 		completedTasks:  make(map[string]bool),
 		activeHashes:    initialHashes,
 		fileStore:       fileStore,
+		storageLock:     storageLock,
 		rateLimiter:     NewRateLimiter(filepath.Dir(taskStorePath)),
 		workerPool:      make(chan struct{}, 100),
 		progressSubs:    make([]chan string, 0),

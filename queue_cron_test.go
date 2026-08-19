@@ -3,13 +3,15 @@ package snerd
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
 func TestCronRescheduling(t *testing.T) {
-	// Setup queue
-	q := NewAnyQueue("cron-test-queue", 100, 100*time.Millisecond)
+	// Setup queue on isolated test storage
+	cronLog := filepath.Join(t.TempDir(), "tasks.log")
+	q := NewAnyQueueWithStorage("cron-test-queue", 100, 100*time.Millisecond, cronLog)
 
 	// Track executions
 	executed := make(chan bool, 1)
