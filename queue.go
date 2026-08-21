@@ -76,8 +76,10 @@ type AnyQueue struct {
 	// added to executingTasks yet. Prevents re-adding the same task.
 	queuedTasks map[string]bool
 	queuedMu    sync.Mutex
-	// Tasks that have completed execution. Final safety net to prevent duplicates.
-	completedTasks map[string]bool
+	// Tasks that have completed execution, mapped to their completion time.
+	// Final safety net to prevent duplicates; entries are evicted after
+	// completedTTL to bound memory.
+	completedTasks map[string]time.Time
 	completedMu    sync.Mutex
 	workerPool     chan struct{}
 	progressSubs   []chan string
@@ -87,6 +89,15 @@ type AnyQueue struct {
 // TaskFactory creates a Task from its stored data.
 // The factory function is responsible for reconstructing a Task instance, including unmarshaling any stored data.
 type TaskFactory func(id string, data string) (Task, error)
+
+const (
+	// How long a completed task id stays in completedTasks before eviction.
+	// It is only a safety net against duplicate execution within a short
+	// window; the tombstone in the task log is the durable source of truth.
+	completedTTL = 60 * time.Second
+	// How often the sweeper evicts expired completed entries.
+	completedSweepInterval = 30 * time.Second
+)
 
 // NewAnyQueue creates a new queue with the given parameters
 func NewAnyQueue(args ...interface{}) *AnyQueue {
@@ -181,7 +192,7 @@ func newAnyQueue(name string, maxSize int, taskStorePath string, processingInter
 		processorActive: false,
 		executingTasks:  make(map[string]bool),
 		queuedTasks:     make(map[string]bool),
-		completedTasks:  make(map[string]bool),
+		completedTasks:  make(map[string]time.Time),
 		activeHashes:    initialHashes,
 		fileStore:       fileStore,
 		storageLock:     storageLock,
@@ -224,6 +235,33 @@ func (q *AnyQueue) startProcessor(interval time.Duration) {
 			}
 		}
 	}()
+
+	// Periodically evict completed-task entries older than completedTTL so
+	// the dedup map does not grow unboundedly on long-running processes.
+	go func() {
+		ticker := time.NewTicker(completedSweepInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-q.processorCtx.Done():
+				return
+			case <-ticker.C:
+				q.completedMu.Lock()
+				evictExpiredCompleted(q.completedTasks, time.Now(), completedTTL)
+				q.completedMu.Unlock()
+			}
+		}
+	}()
+}
+
+// evictExpiredCompleted drops completed entries older than now-ttl.
+func evictExpiredCompleted(completed map[string]time.Time, now time.Time, ttl time.Duration) {
+	for id, completedAt := range completed {
+		if now.Sub(completedAt) >= ttl {
+			delete(completed, id)
+		}
+	}
 }
 
 // StopProcessor stops the background task processor
@@ -435,7 +473,8 @@ func (q *AnyQueue) ProcessDueTasks() {
 		go func(snerdTask *SnerdTask, handler func(context.Context, string) error) {
 			// Final safety check: skip if already completed (prevents duplicate execution)
 			q.completedMu.Lock()
-			if q.completedTasks[snerdTask.GetTaskID()] {
+			_, alreadyCompleted := q.completedTasks[snerdTask.GetTaskID()]
+			if alreadyCompleted {
 				q.completedMu.Unlock()
 				<-q.workerPool
 				return
@@ -516,7 +555,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 					if q.fileStore != nil {
 						// Mark as completed to prevent duplicate execution
 						q.completedMu.Lock()
-						q.completedTasks[snerdTask.GetTaskID()] = true
+						q.completedTasks[snerdTask.GetTaskID()] = time.Now()
 						q.completedMu.Unlock()
 
 						// First check if the task is already deleted
@@ -567,7 +606,7 @@ func (q *AnyQueue) ProcessDueTasks() {
 						fmt.Println("CALLING QUEUE FILESTORE FOR DELETING THE TASK AFTER SUCCESSFUL TASK!!!!")
 						// Mark as completed to prevent duplicate execution
 						q.completedMu.Lock()
-						q.completedTasks[snerdTask.GetTaskID()] = true
+						q.completedTasks[snerdTask.GetTaskID()] = time.Now()
 						q.completedMu.Unlock()
 
 						latestTask, getErr := q.fileStore.GetLatestTask(snerdTask.GetTaskID())
